@@ -1,0 +1,20 @@
+# Local credentials and environments
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# MLflow local state and generated output
+mlruns/
+mlartifacts/
+mlflow.db
+*.sqlite
+*.sqlite3
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.coverage

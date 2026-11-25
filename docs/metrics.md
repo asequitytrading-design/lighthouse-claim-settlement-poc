@@ -1,0 +1,22 @@
+# POC KPI and debugging contract
+
+Targets are provisional and need claims-examiner/product-owner review. LLM scores are not the only safety gate.
+
+| KPI | Definition | Unit | Collection point | Initial target | Owner |
+|---|---|---|---|---|---|
+| Output schema validity | Valid required fields/types divided by attempts | percent | Output validator | 100% or block | Engineer |
+| Benefit decision violation | benefit_determination differs from Not determined | count | Deterministic validator | 0; any violation blocks | Product owner |
+| Sensitive-case routing | Injury, death, diagnosis, conflict or uncertainty cases flagged for review | percent | Golden set checks | 100% fixtures | Claims SME |
+| Golden fact coverage | Supported expected facts divided by expected facts | percent | Judge/reviewer | Baseline first | Claims SME |
+| Evidence flag accuracy | Case-specific absent/inconsistent items correctly surfaced | percent | Golden evaluation | Baseline first | Claims SME |
+| Evaluation completion | Scored cases divided by submitted cases | percent | Evaluation service | 100% or fail run | Engineer |
+| Model latency | Endpoint request duration | milliseconds | Model adapter | Baseline first | Engineer |
+| Endpoint failure rate | Failed calls divided by attempts | percent | Model adapter | Baseline first | Platform owner |
+| Lineage completeness | Runs with app/prompt/model/dataset/scorer/Git IDs | percent | Candidate manifest | 100% | Engineer |
+| Review record coverage | Published candidates with reviewer, decision, rationale and time | percent | Approval service | 100% before publish | Product owner |
+| Token/cost attribution | Token/cost when endpoint exposes it | tokens/currency | Endpoint/gateway logs | Baseline first | Platform owner |
+| LLM judge agreement | Agreement between judge result and SME review on sampled cases | percent / Cohen's kappa | Judge feedback compared with reviewer labels | Baseline first; calibrate before promotion | Claims SME |
+| Judge rationale coverage | Evaluation outputs with judge value and rationale | percent | MLflow scorer feedback on traces | 100% for completed judge runs | Engineer |
+| Judge route lineage | Runs recording judge model/route, scorer version, and dataset version | percent | Evaluation run manifest | 100% | Platform owner |
+
+For each module, feature or bug fix, record KPI change, baseline, target and measurement source in its PR/commit notes. Avoid logging raw narratives, diagnoses, death details, personal identifiers or secrets.
