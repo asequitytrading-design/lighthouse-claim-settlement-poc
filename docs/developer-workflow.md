@@ -98,6 +98,9 @@ Verified 2026-11-25: `prompt list` and `show` on Unity Catalog; the same draft
 
 ## Where results live
 
+To do the same from the MLflow UI (Playground, prompt versions, judges), see
+[mlflow-ui-guide.md](mlflow-ui-guide.md).
+
 - **MLflow UI** (local `http://localhost:5000`, or the Databricks workspace): prompt versions
   and aliases, `try` traces, evaluation runs and their side-by-side comparison.
 - Approval decisions (step 3) will be recorded on the prompt version and the evaluation run.

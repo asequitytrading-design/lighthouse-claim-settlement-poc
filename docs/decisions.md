@@ -148,3 +148,28 @@ creating a registry version for every edit.
 server returns epoch milliseconds; the CLI handles both. Reading another identity's schema
 (e.g. the CI schema) needs an explicit grant.
 
+## ADR-007: MLflow UI AI Gateway endpoints call Kong (2026-11-25)
+
+**Context.** The MLflow 3.18 UI (Playground, judges, automatic evaluation) only lists models
+registered as MLflow AI Gateway endpoints. Developers and reviewers want to author prompts and
+judge traces in the UI with the same local models the code uses.
+
+**Decision.**
+- UI endpoints are OpenAI-provider endpoints whose base URL is a Kong route
+  (`http://kong:8000/ai/<logical-model>`) and whose model name is the model Kong pins for that
+  route. Kong remains the authenticating, routing gateway; MLflow's gateway is a client of it.
+- Kong's pre-function maps `Authorization: Bearer` (the only credential the MLflow gateway
+  sends) to `apikey` before key-auth and strips it from the upstream request. It also defaults
+  `reasoning_effort` to `none` when the caller does not set it.
+- The MLflow server encrypts stored API keys with `MLFLOW_CRYPTO_KEK_PASSPHRASE` from `.env`,
+  and allows private, plain-http upstream base URLs, because the traffic stays on the Docker
+  network.
+- Endpoints enable usage tracking into the experiment being worked on, so UI trials become
+  traces that UI judges can score.
+- MLflow artifacts are proxied by the server (`--artifacts-destination`).
+
+**Consequences.** Verified: gateway → Kong → Ollama answers in about 1.6 s; usage tracking
+writes `gateway/<endpoint>` → `provider/...` traces without the Kong key. The 3.18 UI cannot run
+a prompt version over a dataset, so batch evaluation stays in code (`lighthouse eval`, planned).
+The Kong key is stored in MLflow (encrypted) in addition to `.env`.
+

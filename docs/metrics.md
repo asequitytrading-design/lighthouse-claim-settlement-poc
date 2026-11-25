@@ -35,5 +35,8 @@ Targets are provisional and need claims-examiner/product-owner review. LLM score
 | Trial latency | Wall time of one `lighthouse try` case | milliseconds | `prompt_try_completed` log `duration_ms` | Baseline: ~14 s local qwen3.5-4b, ~52 s Unity Gateway qwen35-122b (2026-11-25) | Engineer |
 | Registry versions per accepted change | Registered prompt versions created per change that reaches review (drafts iterate unregistered) | count | Prompt registry history vs PRs touching `prompts/` | 1 | Engineer |
 | CLI configuration errors | `lighthouse` invocations ending with exit code 2, by error type | count | stderr / `-v` structured logs | Trending to 0 per developer onboarding | Engineer |
+| UI endpoint availability | AI Gateway endpoint test calls that return non-empty content | percent | Endpoint page test / `gateway/<endpoint>` traces | 100% for registered endpoints | Engineer |
+| UI trial trace capture | Playground calls that appear as traces in the selected experiment | percent | Experiment Traces tab (usage tracking) | 100% | Engineer |
+| Triage negative-case pass rate | Negative golden cases (decision request, injection, out of scope, medical, unclear, identifier) whose expected fields and guidelines all pass | percent | Judges on traces / evaluation run on `claim_intake_triage_golden` | Baseline first; 100% before publishing | Claims SME |
 
 For each module, feature or bug fix, record KPI change, baseline, target and measurement source in its PR/commit notes. Avoid logging raw narratives, diagnoses, death details, personal identifiers or secrets.

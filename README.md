@@ -30,6 +30,10 @@ Environment differences live in `config/profiles/{local,databricks}.yaml`; code 
 
 `lighthouse prompt list | show | diff` and `lighthouse try` let developers inspect versions, edit a draft prompt and try it on a golden case with any profile model, locally or on Databricks, without registering a version per edit: [docs/developer-workflow.md](docs/developer-workflow.md).
 
+## MLflow UI (no code)
+
+Register the Kong models as MLflow AI Gateway endpoints, author a prompt in the Playground, version it and judge its traces in the UI, using the sample use case in `samples/claim_intake_triage/` (11 synthetic positive and negative cases): [docs/mlflow-ui-guide.md](docs/mlflow-ui-guide.md).
+
 ## Databricks deployment
 
 `databricks bundle deploy && databricks bundle run lighthouse_prompt_eval` deploys a Unity Catalog schema, an MLflow experiment and a serverless job (register prompt if changed → evaluate). GitHub Actions tests every push and deploys `main`. Step-by-step setup, including the manual workspace, identity and Unity Gateway steps: [docs/databricks-setup.md](docs/databricks-setup.md).

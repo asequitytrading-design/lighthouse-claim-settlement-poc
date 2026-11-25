@@ -19,23 +19,44 @@ services:
         config:
           key_names: [apikey]
           hide_credentials: true
-      # Provider capability shim: Ollama answers `response_format` (JSON mode) with
+      # Provider capability shims (second block below): Ollama answers `response_format` (JSON mode) with
       # HTTP 501, which MLflow judges only retry without JSON mode after HTTP 400.
       # Dropping the field makes callers rely on prompt instructions + validation.
       # request-transformer cannot do this: ai-proxy rebuilds the upstream body from
       # the client request, so the client body itself is edited before ai-proxy runs.
+      #
+      # Credential shim: OpenAI-compatible clients that can only send
+      # `Authorization: Bearer <key>` (the MLflow UI AI Gateway) are mapped to the
+      # `apikey` header before key-auth runs (pre-function has higher priority), and the
+      # Authorization header is removed so it never reaches the upstream.
       - name: pre-function
         config:
           access:
             - |
+              if not kong.request.get_header("apikey") then
+                local auth = kong.request.get_header("authorization")
+                local token = auth and auth:match("^[Bb]earer%s+(%S+)%s*$")
+                if token then
+                  kong.service.request.set_header("apikey", token)
+                  kong.service.request.clear_header("authorization")
+                end
+              end
+            - |
+              -- Body shims: drop response_format (Ollama 501) and default
+              -- reasoning_effort to "none" when the caller did not choose one (local
+              -- Qwen3.5 otherwise spends the token budget thinking and returns empty
+              -- content to clients that cannot set it, e.g. the MLflow UI Playground).
               local raw = kong.request.get_raw_body()
-              if raw and raw:find('"response_format"', 1, true) then
+              if raw and (raw:find('"response_format"', 1, true)
+                          or not raw:find('"reasoning_effort"', 1, true)) then
                 local cjson = require("cjson.safe")
                 local body = cjson.decode(raw)
-                if type(body) == "table" and body.response_format ~= nil then
+                if type(body) == "table" then
                   body.response_format = nil
+                  if body.reasoning_effort == nil then
+                    body.reasoning_effort = "none"
+                  end
                   ngx.req.set_body_data(cjson.encode(body))
-                  kong.log.debug("removed response_format for ollama upstream")
                 end
               end
     routes:

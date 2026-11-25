@@ -11,6 +11,13 @@ services:
       --backend-store-uri sqlite:////mlflow-data/mlflow.db
       --artifacts-destination /mlflow-artifacts
       --workers 2
+    environment:
+      # UI AI Gateway (Gateway, Playground, Judges pages): API keys stored in MLflow are
+      # encrypted with this passphrase; endpoints may target Kong on the compose network
+      # (private IP, plain http: the traffic never leaves the Docker network).
+      MLFLOW_CRYPTO_KEK_PASSPHRASE: ${MLFLOW_CRYPTO_KEK_PASSPHRASE:?set MLFLOW_CRYPTO_KEK_PASSPHRASE in .env}
+      MLFLOW_GATEWAY_API_BASE_ALLOW_PRIVATE_IPS: "true"
+      MLFLOW_GATEWAY_API_BASE_ALLOWED_SCHEMES: "http,https"
     ports:
       - "127.0.0.1:5000:5000"
     volumes:
