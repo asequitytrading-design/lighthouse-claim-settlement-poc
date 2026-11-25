@@ -14,7 +14,7 @@ data only.
 | Try a prompt on one input with a chosen model | yes | **Playground** (variables such as `{{claimant_message}}`) |
 | Store a golden dataset | yes (records added in the UI or loaded by script) | Experiment → **Datasets** |
 | Judge traces with LLM judges | yes | Experiment → **Judges**, then **Traces** → **Run judges** |
-| Run a prompt version over a whole dataset and compare runs | **no** | Code: `mlflow.genai.evaluate`; `lighthouse eval` is planned (step 2) |
+| Run a prompt version over a whole dataset and compare runs | **no** | `lighthouse eval` (below); results open in **Evaluation runs** |
 
 So the UI covers authoring, single-input trials and judging of the traces those trials
 produce. Batch evaluation of a prompt version against the golden set is still code.
@@ -145,13 +145,26 @@ Judges that use gateway endpoints can also **evaluate new traces automatically**
 need expectations, such as **Expectations Guidelines** and Correctness, cannot run automatically,
 because Playground traces carry no golden expectations.
 
-## What remains code (next step)
+## Step 6: Evaluate a UI-created prompt version on the golden set
 
-Running **prompt version × golden dataset × model** as one evaluation run, with
-`expected_fields` checks and per-case guidelines, is not available in the 3.18 UI. The planned
-`lighthouse eval` command (step 2 of the developer CLI) will run a registered prompt such as
-`claim_intake_triage@candidate` over `claim_intake_triage_golden` with a profile model. The
-result is an evaluation run you can open and compare in **Evaluation runs**.
+The 3.18 UI cannot run a prompt version over a dataset, so this step uses the CLI. The results
+appear in the UI:
+
+```bash
+lighthouse eval --spec claim_intake_triage --prompt @candidate --baseline 1 \
+    --model claims-small --experiment /lighthouse-ui-sample
+```
+
+- Use `--prompt` with any reference: the version number you saved, an alias you set in the UI,
+  or `latest`.
+- The spec `config/evals/claim_intake_triage.yaml` scores each case with hard gates, the
+  weighted rubric and the LLM judges (`claims-judge`), and combines them into one review score.
+  See [developer-workflow.md](developer-workflow.md#golden-evaluation-and-the-review-score).
+- In the UI, go to **Evaluation runs** in `/lighthouse-ui-sample`: open a run, check the
+  per-case `gate_*`, `rubric_*`, `judge_*` and `lighthouse_combined_score` assessments with
+  their rationales, then select two runs to compare them. The run tag `lighthouse.verdict` holds
+  BLOCKED, NEEDS WORK or READY FOR HUMAN REVIEW.
+- Repeat with `--model claims-medium` to compare models for the same prompt version.
 
 ## Troubleshooting
 

@@ -38,5 +38,11 @@ Targets are provisional and need claims-examiner/product-owner review. LLM score
 | UI endpoint availability | AI Gateway endpoint test calls that return non-empty content | percent | Endpoint page test / `gateway/<endpoint>` traces | 100% for registered endpoints | Engineer |
 | UI trial trace capture | Playground calls that appear as traces in the selected experiment | percent | Experiment Traces tab (usage tracking) | 100% | Engineer |
 | Triage negative-case pass rate | Negative golden cases (decision request, injection, out of scope, medical, unclear, identifier) whose expected fields and guidelines all pass | percent | Judges on traces / evaluation run on `claim_intake_triage_golden` | Baseline first; 100% before publishing | Claims SME |
+| Combined review score | Mean per-case combined score (0 if a hard gate failed, else weighted rubric + judges) | percent | `lighthouse eval` run metric `lighthouse/combined_score` | ≥ spec `pass_threshold` (default 80%) | Claims SME |
+| Hard gate pass rate | Cases passing every hard gate | percent | Run metric `lighthouse/hard_gate_pass_rate` | 100% (else BLOCKED) | Engineer |
+| Rubric score | Weighted deterministic rubric mean | percent | Run metric `lighthouse/rubric_score` | Baseline first | Engineer |
+| Judge agreement score | Mean judge verdicts (yes = 1) excluding errors | percent | Run metric `lighthouse/judge_score` | Baseline first | Claims SME |
+| Judge error count | Judge assessments without a verdict | count | Run metric `lighthouse/judge_errors` | 0 | Platform owner |
+| Candidate vs baseline delta | Change in combined score between prompt versions on the same cases, model and judges | points | `lighthouse eval --baseline` output | ≥ 0 before review | Engineer |
 
 For each module, feature or bug fix, record KPI change, baseline, target and measurement source in its PR/commit notes. Avoid logging raw narratives, diagnoses, death details, personal identifiers or secrets.

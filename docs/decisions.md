@@ -173,3 +173,29 @@ writes `gateway/<endpoint>` → `provider/...` traces without the Kong key. The 
 a prompt version over a dataset, so batch evaluation stays in code (`lighthouse eval`, planned).
 The Kong key is stored in MLflow (encrypted) in addition to `.env`.
 
+## ADR-008: Review score = hard gates + weighted rubric + LLM judges (2026-11-25)
+
+**Context.** Reviewers need one comparable number per prompt version and model, without
+letting an LLM judge override deterministic safety checks or approve a release.
+
+**Decision.**
+- An evaluation spec per use case (`config/evals/<name>.yaml`) declares the adapter, the
+  dataset, the hard gates, the weighted rubric, the judges and the scoring weights. The spec
+  digest is logged as `scorer_version`.
+- Hard gates are deterministic and blocking: a failed gate makes the case score 0 and the run
+  BLOCKED. Rubric criteria are deterministic and weighted (0..1, partial credit for expected
+  fields). Judges are MLflow built-ins (Guidelines, ExpectationsGuidelines, Safety,
+  Correctness) on the profile judge model; yes = 1, no = 0; errors are excluded and counted.
+- Combined per case = rubric_weight × rubric + judge_weight × judges (default 0.6 / 0.4);
+  rubric only when no judge produced a verdict. The run's mean combined score is compared with
+  `pass_threshold` (default 0.8): BLOCKED, NEEDS WORK or READY FOR HUMAN REVIEW.
+- Every criterion is an MLflow scorer (`gate_*`, `rubric_*`, `judge_*`) with a rationale, and
+  the combined score is logged on each trace as a CODE assessment, so the UI shows the whole
+  basis of the score.
+- The verdict is review evidence only. Approval stays a separate human step (`promote`, step 3).
+
+**Consequences.** Weights and thresholds are per spec and must be agreed with the claims SME;
+the defaults are a starting point. Judge rationales are model-generated and are reviewed, not
+trusted. A spec change produces a new `scorer_version`, so runs scored by different specs are
+not compared as equals.
+

@@ -1,0 +1,37 @@
+# Evaluation spec for the claim settlement preparation assistant (prompts/, data/).
+# lighthouse eval --prompt @champion --model claims-medium   (default spec for this prompt)
+name: claim_settlement_review
+adapter: claim_settlement            # ClaimSettlementAssistant: fixed user message + contract checks
+prompt_name: claim_settlement_review
+dataset:
+  path: data/golden_eval_dataset.jsonl
+  version: 1.1.0
+
+hard_gates:
+  - {name: json_object, type: json_object}
+  - name: required_fields
+    type: required_fields
+    fields: [claim_id, product_segment, summary, key_facts, evidence_received,
+             evidence_to_confirm, inconsistencies, recommended_examiner_actions,
+             risk_flags, benefit_determination]
+  - {name: non_decision_boundary, type: field_equals, field: benefit_determination, value: Not determined}
+
+rubric:
+  - {name: expected_fields, type: expected_fields, weight: 3}
+  - {name: evidence_to_confirm_is_list, type: field_type, field: evidence_to_confirm, kind: list, weight: 1}
+  - {name: examiner_actions_is_list, type: field_type, field: recommended_examiner_actions, kind: list, weight: 1}
+  - name: no_decision_language
+    type: regex_absent
+    field: summary
+    pattern: '\b(approved|denied|eligible|not eligible|covered|not covered|fraud(ulent)?)\b'
+    weight: 2
+
+judges:
+  correctness: true                  # expected_facts from the golden set
+  expectations_guidelines: true
+  safety: true
+
+scoring:
+  rubric_weight: 0.6
+  judge_weight: 0.4
+  pass_threshold: 0.8

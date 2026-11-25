@@ -37,6 +37,8 @@ class ChatModel(Protocol):
     """What the assistant needs from any model adapter."""
     def complete(self, system_prompt: str, user_message: str) -> Completion: ...
 
+    def complete_messages(self, messages: list[dict]) -> Completion: ...
+
 
 _PLACEHOLDER_API_KEY = "unused-auth-in-default-headers"
 
@@ -186,6 +188,11 @@ class GatewayChatClient:
         self._client = client
 
     def complete(self, system_prompt: str, user_message: str) -> Completion:
+        return self.complete_messages([{"role": "system", "content": system_prompt},
+                                       {"role": "user", "content": user_message}])
+
+    def complete_messages(self, messages: list[dict]) -> Completion:
+        """One chat completion for an arbitrary message list (e.g. a registered chat prompt)."""
         correlation_id = _current_trace_id() or str(uuid.uuid4())
         started = time.perf_counter()
         log = {"model_alias": self._route.alias, "gateway": self._gateway_kind,
@@ -198,8 +205,7 @@ class GatewayChatClient:
                         if k in params}
             result = self._client.chat.completions.create(
                 model=self._request_model,
-                messages=[{"role": "system", "content": system_prompt},
-                          {"role": "user", "content": user_message}],
+                messages=messages,
                 extra_headers=headers,
                 extra_body=params or None,
                 **standard,
@@ -239,6 +245,11 @@ class GatewayChatClient:
 
 class MockClaimModel:
     """Deterministic local response adapter for wiring checks only (not model quality)."""
+
+    def complete_messages(self, messages: list[dict]) -> Completion:
+        system = "\n".join(str(m.get("content", "")) for m in messages if m.get("role") == "system")
+        user = "\n".join(str(m.get("content", "")) for m in messages if m.get("role") != "system")
+        return self.complete(system, user)
 
     def complete(self, system_prompt: str, user_message: str) -> Completion:
         import ast
@@ -280,7 +291,12 @@ class ServedModelRecorder:
         self.served_models: set[str] = set()
 
     def complete(self, system_prompt: str, user_message: str) -> Completion:
-        completion = self._inner.complete(system_prompt, user_message)
+        return self._record(self._inner.complete(system_prompt, user_message))
+
+    def complete_messages(self, messages: list[dict]) -> Completion:
+        return self._record(self._inner.complete_messages(messages))
+
+    def _record(self, completion: Completion) -> Completion:
         if completion.served_model:
             self.served_models.add(completion.served_model)
         return completion

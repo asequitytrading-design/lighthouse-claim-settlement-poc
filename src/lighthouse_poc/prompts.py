@@ -4,7 +4,7 @@ A reference is one of:
   ``3``              registered version 3
   ``@champion``      the version an alias points to
   ``latest``         highest registered version
-  ``file:<path>``    an unregistered draft template on disk
+  ``file:<path>``    an unregistered draft template on disk (``.json`` = chat messages)
 
 Drafts let developers iterate without creating registry versions. A draft is labelled by
 the hash of its content (``draft-<sha>``) so every trace and run says exactly which text
@@ -13,6 +13,7 @@ ran; only registered versions can be approved and published.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,7 +50,7 @@ class ResolvedPrompt:
     """A prompt template plus the lineage needed to label traces and runs."""
     name: str
     label: str                     # registered version number or draft-<sha>
-    template: str
+    template: str | list           # text, or chat messages [{"role", "content"}]
     source: str                    # registry | file
     reference: str                 # what the developer asked for, e.g. @champion
     aliases: tuple[str, ...] = ()
@@ -62,13 +63,46 @@ class ResolvedPrompt:
     def is_draft(self) -> bool:
         return self.source == "file"
 
-    def format(self, **variables) -> str:
-        """Same rendering as a registered version, so drafts behave identically."""
-        return PromptVersion(name=self.name, version=1, template=self.template).format(**variables)
+    @property
+    def is_chat(self) -> bool:
+        return isinstance(self.template, list)
+
+    @property
+    def variables(self) -> set[str]:
+        return set(self._version().variables)
+
+    @property
+    def text(self) -> str:
+        """Human-readable template: text as is; chat as JSON messages (one per line)."""
+        if self.is_chat:
+            return "[\n" + ",\n".join(json.dumps(m, ensure_ascii=False) for m in self.template) + "\n]\n"
+        return self.template
+
+    def format(self, **variables):
+        """Same rendering as a registered version, so drafts behave identically.
+
+        Text prompts return a string; chat prompts return a list of messages.
+        """
+        return self._version().format(**variables)
+
+    def _version(self) -> PromptVersion:
+        return PromptVersion(name=self.name, version=1, template=self.template)
 
 
-def draft_label(template: str) -> str:
-    return "draft-" + hashlib.sha256(template.encode("utf-8")).hexdigest()[:8]
+def draft_label(template: str | list) -> str:
+    text = template if isinstance(template, str) else json.dumps(template, sort_keys=True)
+    return "draft-" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+
+
+def _chat_template(text: str, path: Path) -> list:
+    try:
+        messages = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ConfigurationError(f"Chat draft {path} is not valid JSON") from exc
+    if not (isinstance(messages, list) and messages and all(
+            isinstance(m, dict) and {"role", "content"} <= set(m) for m in messages)):
+        raise ConfigurationError(f"Chat draft {path} must be a list of {{role, content}} messages")
+    return messages
 
 
 class PromptResolver:
@@ -89,6 +123,8 @@ class PromptResolver:
                 raise ConfigurationError(f"Cannot read draft prompt {path}") from exc
             if not template.strip():
                 raise ConfigurationError(f"Draft prompt {path} is empty")
+            if path.suffix.lower() == ".json":
+                template = _chat_template(template, path)
             return ResolvedPrompt(self._name, draft_label(template), template, "file",
                                   f"file:{ref.value}", path=str(path))
         if ref.kind == "latest":

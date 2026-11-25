@@ -12,11 +12,11 @@ prompts). `--profile` selects which one. Synthetic cases only.
 | Start a draft from an existing version | `lighthouse prompt show 3 --template-only > prompts/draft.txt` | available |
 | Compare two versions or a draft | `lighthouse prompt diff <old> <new>` | available |
 | Try one golden case | `lighthouse try --prompt <ref> --case <id> --model <alias>` | available |
-| Golden evaluation of a draft or version, compared with a baseline | `lighthouse eval ... --baseline @champion` | planned (step 2) |
+| Golden evaluation of a draft or version, compared with a baseline | `lighthouse eval --prompt <ref> --baseline <ref>` | available |
 | Register, approve and publish (move `@champion`) | `lighthouse prompt register`, `lighthouse promote` | planned (steps 2–3) |
 
-Until steps 2–3 land, register with `scripts/register_prompt.py` and run the golden evaluation
-with `scripts/evaluate.py` (see [local-development.md](local-development.md)).
+Until step 3 lands, register with `scripts/register_prompt.py` (or save a version in the MLflow UI
+Playground). `scripts/evaluate.py` remains the job entry point.
 
 ## Prompt references
 
@@ -57,6 +57,46 @@ One case is a smoke test. A prompt change needs the full golden evaluation befor
 
 `prompt diff` compares sentence by sentence by default, because templates are often one long
 paragraph; `--by line` compares lines.
+
+## Golden evaluation and the review score
+
+```bash
+lighthouse eval --prompt file:prompts/draft.txt --baseline @champion --model claims-medium
+lighthouse eval --spec claim_intake_triage --prompt @candidate --model claims-small
+lighthouse eval --prompt latest --model claims-small --no-judges      # fast: gates + rubric only
+```
+
+`--spec` names an evaluation spec in `config/evals/` (default: the profile prompt's spec,
+`claim_settlement_review`). The spec says how the prompt is run (`adapter`), which dataset
+to use, and how outputs are scored:
+
+| Layer | What | Effect |
+|---|---|---|
+| Hard gates | Deterministic, e.g. valid JSON, required fields, `benefit_determination = Not determined` | Any failure scores the case 0 and the run **BLOCKED** |
+| Rubric | Deterministic weighted criteria, 0–1 each: expected fields (partial credit), list types, no amounts or decision words in the reply, no echo of identifiers from the input | Weighted mean = rubric score |
+| LLM judges | MLflow built-ins on the profile judge model: Guidelines (spec rules), ExpectationsGuidelines (per-case rules), Safety, Correctness (expected facts) | yes = 1, no = 0; mean = judge score; judge errors are excluded and counted |
+
+Per case: **combined = 0 if a gate failed, otherwise 0.6 × rubric + 0.4 × judges** (weights per
+spec; rubric only when no judge gave a verdict). Per run, the mean combined score gives the
+verdict: **BLOCKED**, **NEEDS WORK** (below `pass_threshold`, default 0.8) or **READY FOR HUMAN
+REVIEW**. The verdict is evidence for a human reviewer, never an approval. With `--baseline`,
+both prompts run on the same cases, model and judges, and a per-case delta table follows.
+
+Each run is an MLflow evaluation run with:
+- per-trace assessments `gate_*`, `rubric_*` and `judge_*` (value and rationale), plus
+  `lighthouse_combined_score`;
+- metrics `lighthouse/combined_score`, `rubric_score`, `judge_score`, `hard_gate_pass_rate`,
+  `cases_below_threshold` and `judge_errors`;
+- the tag `lighthouse.verdict`, the artifact `lighthouse_review.json`, and lineage params
+  (prompt reference and version, model, judge, dataset, spec digest, weights, Git commit).
+
+Exit code: 1 when BLOCKED, 0 otherwise, 2 for configuration errors. `--dataset
+mlflow:<name>` evaluates an MLflow dataset instead of the spec's JSONL.
+
+Prompts saved from the MLflow UI Playground are chat prompts (a list of messages). The
+`chat_prompt` adapter renders their `{{variables}}` from each record's inputs. To iterate
+on one as a file, `lighthouse prompt show <ref> --template-only > draft.json` and use
+`file:draft.json`.
 
 ## Against Databricks from a laptop
 

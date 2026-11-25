@@ -1,4 +1,4 @@
-"""lighthouse: developer CLI for prompt versions and quick single-case trials.
+"""lighthouse: developer CLI for prompt versions, single-case trials and golden evaluations.
 
 The same commands work locally (Ollama via Kong, local MLflow) and against Databricks
 (Unity Gateway, Unity Catalog prompts) by switching --profile. Prompt references:
@@ -11,6 +11,8 @@ The same commands work locally (Ollama via Kong, local MLflow) and against Datab
   lighthouse cases
   lighthouse try --prompt file:prompts/draft.txt --case CSET-LTD-002 --model claims-small
   lighthouse --profile databricks try --prompt latest --case CSET-STD-001 --model claims-medium
+  lighthouse eval --prompt file:prompts/draft.txt --baseline @champion --model claims-medium
+  lighthouse eval --spec claim_intake_triage --prompt @candidate --model claims-small
 """
 from __future__ import annotations
 
@@ -114,19 +116,20 @@ def _describe(prompt: ResolvedPrompt) -> list[str]:
         lines += [f"aliases:     {' '.join(prompt.aliases) or '-'}",
                   f"created:     {_when(prompt.creation_timestamp)}",
                   f"change note: {prompt.commit_message or '-'}"]
-    variables = sorted(re.findall(r"\{\{\s*(\w+)\s*\}\}", prompt.template))
-    lines.append(f"size:        {len(prompt.template)} chars; variables: {', '.join(variables) or 'none'}")
+    kind = f"chat, {len(prompt.template)} messages" if prompt.is_chat else "text"
+    lines.append(f"type:        {kind}; {len(prompt.text)} chars; "
+                 f"variables: {', '.join(sorted(prompt.variables)) or 'none'}")
     return lines
 
 
 def cmd_prompt_show(ctx: Context, args) -> int:
     prompt = ctx.resolver.resolve(args.ref)
-    if args.template_only:
-        ctx.out.write(prompt.template)
+    if args.template_only:  # chat prompts print as JSON, reusable as a file:<draft>.json
+        ctx.out.write(prompt.text)
         return 0
     print("\n".join(_describe(prompt)), file=ctx.out)
     print("-" * 72, file=ctx.out)
-    print(prompt.template.rstrip("\n"), file=ctx.out)
+    print(prompt.text.rstrip("\n"), file=ctx.out)
     return 0
 
 
@@ -140,7 +143,7 @@ def split_units(template: str, unit: str) -> list[str]:
 
 def prompt_diff(old: ResolvedPrompt, new: ResolvedPrompt, unit: str = "sentence") -> list[str]:
     return list(difflib.unified_diff(
-        split_units(old.template, unit), split_units(new.template, unit),
+        split_units(old.text, unit), split_units(new.text, unit),
         fromfile=f"{old.name} {old.label} ({old.reference})",
         tofile=f"{new.name} {new.label} ({new.reference})", lineterm="", n=1))
 
@@ -272,6 +275,90 @@ def cmd_try(ctx: Context, args) -> int:
     return 0 if result["passed"] else 1
 
 
+# ---------------------------------------------------------------- eval
+def qualify_prompt_name(profile_prompt_name: str | None, short_name: str) -> str:
+    """Put a spec's short prompt name in the profile's namespace (Unity Catalog: catalog.schema)."""
+    if "." in short_name or not profile_prompt_name or profile_prompt_name.count(".") < 2:
+        return short_name
+    return f"{profile_prompt_name.rsplit('.', 1)[0]}.{short_name}"
+
+
+def _pct(value) -> str:
+    return "  -  " if value is None else f"{value * 100:5.1f}%"
+
+
+def render_review(review, out: TextIO, run_id: str, label: str) -> None:
+    print(f"{label}: spec {review.spec} | run {run_id}", file=out)
+    print(f"{'CASE':<16} {'GATES':<6} {'RUBRIC':>7} {'JUDGES':>7} {'SCORE':>7}  NOTES", file=out)
+    for case in review.cases:
+        gates = "pass" if case.hard_pass else "FAIL"
+        flag = "" if case.combined >= review.pass_threshold else " <"
+        print(f"{case.case_id:<16} {gates:<6} {_pct(case.rubric_score):>7} "
+              f"{_pct(case.judge_score):>7} {_pct(case.combined):>7}{flag:2} "
+              f"{'; '.join(case.notes)[:110]}", file=out)
+    print("-" * 72, file=out)
+    print(f"hard gates {_pct(review.hard_gate_pass_rate).strip()} | rubric "
+          f"{_pct(review.rubric_mean).strip()} | judges {_pct(review.judge_mean).strip()} | "
+          f"combined {_pct(review.combined_mean).strip()} (threshold "
+          f"{review.pass_threshold * 100:.0f}%) | judge errors {review.judge_errors}", file=out)
+    print(f"verdict: {review.verdict}", file=out)
+
+
+def cmd_eval(ctx: Context, args) -> int:
+    import mlflow
+
+    from .prompt_eval import EvalRequest, load_records, run_eval
+    from .review import BLOCKED, compare
+    from .rubric import load_spec
+
+    short = ctx.prompt_name.rsplit(".", 1)[-1]
+    spec = load_spec(args.spec or short)
+    name = args.prompt_name or qualify_prompt_name(ctx.profile.prompt_name, spec.prompt_name)
+    resolver = PromptResolver(ctx.registry, name)
+    candidate = resolver.resolve(args.prompt)
+    baseline = resolver.resolve(args.baseline) if args.baseline else None
+    mlflow.set_experiment(args.experiment or require(ctx.profile.experiment, "mlflow.experiment"))
+    records, dataset_label = load_records(spec, args.dataset)
+    if args.limit and args.limit > 0:
+        records = records[: args.limit]
+
+    def evaluate(prompt: ResolvedPrompt):
+        print(f"evaluating {prompt.name} {prompt.reference} -> {prompt.label} on {len(records)} "
+              f"cases with {args.model or ctx.profile.default_app_model}"
+              f"{'' if args.no_judges else ' + judges'} ...", file=sys.stderr)
+        return run_eval(ctx.profile, ctx.registry, ctx.logger, EvalRequest(
+            spec=spec, prompt=prompt, model_alias=args.model, records=records,
+            dataset_label=dataset_label, use_judges=not args.no_judges,
+            judge_alias=args.judge_model))
+
+    review, run_id = evaluate(candidate)
+    result = {"candidate": {"run_id": run_id, "prompt_version": candidate.label, **review.to_dict()}}
+    base_review = None
+    if baseline:
+        base_review, base_run = evaluate(baseline)
+        result["baseline"] = {"run_id": base_run, "prompt_version": baseline.label,
+                              **base_review.to_dict()}
+        result["comparison"] = compare(review, base_review)
+    if args.json:
+        print(json.dumps(result, indent=2, default=str), file=ctx.out)
+    else:
+        render_review(review, ctx.out, run_id, f"candidate {candidate.reference} ({candidate.label})")
+        if base_review:
+            print("", file=ctx.out)
+            render_review(base_review, ctx.out, result["baseline"]["run_id"],
+                          f"baseline {baseline.reference} ({baseline.label})")
+            print("", file=ctx.out)
+            print(f"{'CASE':<16} {'CANDIDATE':>9} {'BASELINE':>9} {'DELTA':>8}", file=ctx.out)
+            for row in result["comparison"]:
+                print(f"{row['case_id']:<16} {_pct(row['candidate']):>9} {_pct(row['baseline']):>9} "
+                      f"{(row['delta']) * 100:+7.1f}", file=ctx.out)
+            delta = review.combined_mean - base_review.combined_mean
+            print(f"combined score change: {delta * 100:+.1f} points", file=ctx.out)
+        print("Scores are review evidence for a human reviewer, not an approval. Open the run "
+              "in MLflow to read judge rationales per trace.", file=ctx.out)
+    return 1 if review.verdict == BLOCKED else 0
+
+
 # ---------------------------------------------------------------- parser and entry point
 def _common(parser: argparse.ArgumentParser, suppress: bool) -> None:
     default = argparse.SUPPRESS if suppress else None
@@ -323,7 +410,23 @@ def build_parser() -> argparse.ArgumentParser:
     trial.add_argument("--experiment", help="Override the profile's MLflow experiment for the trace")
     trial.add_argument("--json", action="store_true", help="Machine-readable result")
     trial.set_defaults(handler=cmd_try)
-    for sub in (cases, trial):
+
+    evaluation = commands.add_parser(
+        "eval", help="Golden evaluation: hard gates + weighted rubric + LLM judges -> review score")
+    evaluation.add_argument("--prompt", required=True, help=REF_HELP)
+    evaluation.add_argument("--baseline", help=f"Also evaluate this {REF_HELP} and compare")
+    evaluation.add_argument("--spec", help="Evaluation spec name in config/evals or a YAML path "
+                                           "(default: the profile prompt's spec)")
+    evaluation.add_argument("--model", help="Logical app model from the profile (default: profile app_model)")
+    evaluation.add_argument("--judge-model", help="Logical judge model (default: profile judge_model)")
+    evaluation.add_argument("--no-judges", action="store_true",
+                            help="Deterministic gates and rubric only (fast; combined = rubric)")
+    evaluation.add_argument("--dataset", help="Override: golden JSONL path or mlflow:<dataset name>")
+    evaluation.add_argument("--limit", type=int, default=0, help="Evaluate only the first N cases")
+    evaluation.add_argument("--experiment", help="Override the profile's MLflow experiment")
+    evaluation.add_argument("--json", action="store_true", help="Machine-readable result")
+    evaluation.set_defaults(handler=cmd_eval)
+    for sub in (cases, trial, evaluation):
         _common(sub, suppress=True)
     return parser
 
