@@ -33,9 +33,16 @@ models:
   claims-judge:
     upstream_model: ${UNITY_GATEWAY_JUDGE_MODEL}
     params: {temperature: 0}
+  databricks-managed-judge:      # MLflow's Databricks-managed judge, not via Unity Gateway
+    kind: mlflow_uri
+    model_uri: databricks
   mock:
     kind: mock
 
 defaults:
   app_model: claims-medium
   judge_model: claims-judge
+
+evaluation:
+  max_workers: 4
+  max_scorer_workers: 3

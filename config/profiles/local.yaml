@@ -22,8 +22,10 @@ gateway:
   max_retries: 1
 
 # Logical model names are stable across environments; the gateway decides the
-# physical model. Kong ai-proxy pins the model per route, so `upstream_model` is
-# left empty and the response reports the model that actually served the call.
+# physical model. Kong ai-proxy pins the model per route, so app models leave
+# `upstream_model` empty and the response reports the model that served the call.
+# The judge declares its model on purpose: MLflow judges must name a model, and Kong
+# rejects any name other than the pinned one, so judge lineage cannot drift silently.
 models:
   claims-small:
     route: claims-small
@@ -33,6 +35,11 @@ models:
     params: {temperature: 0, reasoning_effort: none}
   claims-judge:
     route: claims-judge
+    upstream_model: gemma4-e4b-32k:latest   # must equal ai-proxy model.name in kong/kong.yaml
+    params: {temperature: 0, reasoning_effort: none}
+  claims-judge-alt:                         # alternate judge: same route family as claims-medium
+    route: claims-medium
+    upstream_model: qwen3.5-9b-32k:latest
     params: {temperature: 0, reasoning_effort: none}
   mock:
     kind: mock
@@ -40,3 +47,10 @@ models:
 defaults:
   app_model: claims-medium
   judge_model: claims-judge
+
+# One Ollama host serves app and judge models; keep concurrency low so models are not
+# swapped in and out of memory on every request.
+evaluation:
+  max_workers: 2
+  max_scorer_workers: 1
+  judge_timeout_seconds: 600   # MLflow default is 60 s; Ollama model swaps take longer

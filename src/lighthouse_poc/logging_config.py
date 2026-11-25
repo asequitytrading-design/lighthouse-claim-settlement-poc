@@ -10,7 +10,8 @@ class JsonFormatter(logging.Formatter):
               "model_service", "judge_model", "dataset_version", "application_version",
               "duration_ms", "error_type", "error_category", "kpi_name", "kpi_value",
               "environment", "gateway", "model_alias", "gateway_route", "served_model",
-              "correlation_id", "prompt_tokens", "completion_tokens")
+              "correlation_id", "prompt_tokens", "completion_tokens",
+              "judge_model_uri", "judge_base_url")
 
     def format(self, record):
         event = {

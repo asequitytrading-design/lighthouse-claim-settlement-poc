@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import os
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 import yaml
 
@@ -22,7 +23,7 @@ PROFILE_DIR = PROJECT_ROOT / "config" / "profiles"
 PROFILE_ENV_VAR = "LIGHTHOUSE_PROFILE"
 GATEWAY_KINDS = {"kong", "unity_gateway"}
 AUTH_TYPES = {"none", "api_key_header", "bearer_env", "databricks_sdk"}
-MODEL_KINDS = {"gateway", "mock"}
+MODEL_KINDS = {"gateway", "mock", "mlflow_uri"}
 
 _VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
@@ -91,12 +92,31 @@ class ModelRoute:
     route: str | None = None
     upstream_model: str | None = None
     params: Mapping[str, Any] = field(default_factory=dict)
+    model_uri: str | None = None  # kind=mlflow_uri only, e.g. "databricks" managed judge
 
     def request_model(self) -> str:
         """Value for the OpenAI ``model`` field. Empty lets a pinning gateway choose."""
         if self.upstream_model is None:
             return ""
         return require(self.upstream_model, f"upstream_model for '{self.alias}'")
+
+
+@dataclass(frozen=True)
+class EvaluationConfig:
+    """Concurrency limits for mlflow.genai.evaluate (local models need low values)."""
+    max_workers: int | None = None
+    max_scorer_workers: int | None = None
+    judge_timeout_seconds: int | None = None
+
+    def environment(self) -> dict[str, str]:
+        env = {}
+        if self.max_workers:
+            env["MLFLOW_GENAI_EVAL_MAX_WORKERS"] = str(self.max_workers)
+        if self.max_scorer_workers:
+            env["MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS"] = str(self.max_scorer_workers)
+        if self.judge_timeout_seconds:
+            env["MLFLOW_GENAI_EVAL_LLM_TIMEOUT"] = str(self.judge_timeout_seconds)
+        return env
 
 
 @dataclass(frozen=True)
@@ -111,6 +131,7 @@ class Profile:
     default_app_model: str
     default_judge_model: str
     source: Path
+    evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
 
     def model(self, alias: str | None = None) -> ModelRoute:
         alias = alias or self.default_app_model
@@ -130,6 +151,9 @@ class Profile:
         if route.kind == "mock":
             return {"environment": self.environment, "gateway": "none",
                     "model_alias": route.alias, "gateway_route": "mock"}
+        if route.kind == "mlflow_uri":
+            return {"environment": self.environment, "gateway": "mlflow",
+                    "model_alias": route.alias, "gateway_route": str(route.model_uri)}
         return {"environment": self.environment, "gateway": self.gateway.kind,
                 "model_alias": route.alias,
                 "gateway_route": route.route or str(route.upstream_model)}
@@ -161,11 +185,15 @@ def _parse(name: str, data: Mapping, source: Path) -> Profile:
             raise ConfigurationError(f"models.{alias}.kind must be one of {sorted(MODEL_KINDS)}")
         if kind == "gateway" and not (spec.get("route") or "upstream_model" in spec):
             raise ConfigurationError(f"models.{alias} needs a 'route' or 'upstream_model'")
+        if kind == "mlflow_uri" and not spec.get("model_uri"):
+            raise ConfigurationError(f"models.{alias} (kind mlflow_uri) needs 'model_uri'")
         models[alias] = ModelRoute(alias=alias, kind=kind, route=spec.get("route"),
                                    upstream_model=spec.get("upstream_model"),
-                                   params=dict(spec.get("params") or {}))
+                                   params=dict(spec.get("params") or {}),
+                                   model_uri=spec.get("model_uri"))
 
     defaults = data.get("defaults") or {}
+    evaluation = data.get("evaluation") or {}
     profile = Profile(
         name=name,
         environment=str(data.get("environment", name)),
@@ -181,9 +209,32 @@ def _parse(name: str, data: Mapping, source: Path) -> Profile:
         default_app_model=defaults.get("app_model", "mock"),
         default_judge_model=defaults.get("judge_model", ""),
         source=source,
+        evaluation=EvaluationConfig(
+            max_workers=int(evaluation["max_workers"]) if evaluation.get("max_workers") else None,
+            max_scorer_workers=(int(evaluation["max_scorer_workers"])
+                                if evaluation.get("max_scorer_workers") else None),
+            judge_timeout_seconds=(int(evaluation["judge_timeout_seconds"])
+                                   if evaluation.get("judge_timeout_seconds") else None)),
     )
     profile.model(profile.default_app_model)  # fail fast on a dangling default
+    if profile.default_judge_model:
+        profile.model(profile.default_judge_model)
     return profile
+
+
+@contextmanager
+def scoped_environment(values: Mapping[str, str]) -> Iterator[None]:
+    """Set environment variables for a block, then restore the previous values."""
+    previous = {key: os.environ.get(key) for key in values}
+    os.environ.update(values)
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def load_dotenv(path: Path | None = None, env: dict | None = None) -> None:

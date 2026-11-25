@@ -41,3 +41,29 @@ gpt-oss:20b was ruled out as too heavy for the development machine.
 
 **Consequences.** Judge results remain review evidence only; calibrate against SME labels
 (see `docs/metrics.md`, LLM judge agreement) before relying on them.
+
+## ADR-004: LLM judges through the same gateway, credentials off call arguments (2026-11-25)
+
+**Context.** MLflow built-in judges call their model directly using an `openai:/` URI and
+`OPENAI_API_BASE`/`OPENAI_API_KEY`. During `mlflow.genai.evaluate`, MLflow auto-traces
+OpenAI SDK calls and stores call arguments in trace spans. A first implementation passed
+the Kong key per call in `extra_headers` and it was persisted in 14 local trace spans.
+
+**Decision.**
+- `JudgeBinding` (src/lighthouse_poc/scorers.py) resolves the profile's judge alias to a
+  model URI, base URL, credential and inference params. Provider variables are set only for
+  the duration of the evaluation and restored afterwards.
+- Kong judge routes declare `upstream_model` equal to the model Kong pins, so a drift between
+  the profile and the gateway fails loudly (HTTP 400) instead of mislabelling judge lineage.
+- Application gateway credentials live on the SDK client (`default_headers` for Kong,
+  callable `api_key` for bearer/OAuth). Only `X-Correlation-ID` is a per-call header.
+- Ollama's missing JSON mode is handled in Kong (`pre-function`), not in application code.
+- Deterministic gates always run alongside judges; judges never gate alone.
+
+**Remediation performed.** Rotated the local Kong key, deleted the old credential, deleted the
+14 affected traces and vacuumed the local MLflow database; verified the old key is absent
+from MLflow storage and the new key is absent after a full judge run.
+
+**Consequences.** Judge results are comparable between environments (same scorers, profile
+decides the route). Local judge runs are slow (~6 min for 6 cases) because one Ollama host
+alternates between app and judge models.

@@ -86,8 +86,29 @@ def test_env_header_auth_reads_secret_per_request():
 
 
 def test_databricks_sdk_auth_uses_unified_config():
-    cfg = SimpleNamespace(authenticate=lambda: {"Authorization": "Bearer t"})
-    assert DatabricksSdkAuth(lambda: cfg).headers() == {"Authorization": "Bearer t"}
+    tokens = iter(["t1", "t2"])
+    cfg = SimpleNamespace(authenticate=lambda: {"Authorization": f"Bearer {next(tokens)}"})
+    auth = DatabricksSdkAuth(lambda: cfg)
+    options = auth.client_options()          # validates once (consumes t1)
+    assert callable(options["api_key"]) and "default_headers" not in options
+    assert options["api_key"]() == "t2"      # refreshed on every call
+
+
+def test_client_options_keep_credentials_off_call_arguments():
+    header = EnvHeaderAuth("KONG_API_KEY", "apikey", env={"KONG_API_KEY": "k1"})
+    assert header.client_options()["default_headers"] == {"apikey": "k1"}
+    bearer = EnvHeaderAuth("TOKEN", "Authorization", "Bearer ", env={"TOKEN": "b1"})
+    options = bearer.client_options()
+    assert options["api_key"]() == "b1" and "default_headers" not in options
+    with pytest.raises(ConfigurationError):
+        EnvHeaderAuth("MISSING", "Authorization", "Bearer ", env={}).client_options()
+
+
+def test_real_sdk_client_carries_kong_key_in_default_headers(monkeypatch):
+    monkeypatch.setenv("KONG_API_KEY", "kong-secret")
+    profile = load_profile("local", env={})
+    client = build_chat_model(profile, "claims-small", LOGGER)
+    assert client._client.default_headers["apikey"] == "kong-secret"
 
 
 # ---------------------------------------------------------------- gateway client
@@ -127,8 +148,9 @@ def test_gateway_request_shape_and_completion():
     assert call["model"] == ""
     assert call["temperature"] == 0
     assert call["extra_body"] == {"reasoning_effort": "none"}
-    assert call["extra_headers"]["apikey"] == "secret"
-    assert call["extra_headers"]["X-Correlation-ID"] == result.correlation_id
+    # Credentials must never be call arguments: MLflow traces record them.
+    assert call["extra_headers"] == {"X-Correlation-ID": result.correlation_id}
+    assert "secret" not in repr(call)
     assert result.served_model == "qwen3.5-9b-32k:latest"
     assert (result.prompt_tokens, result.completion_tokens) == (10, 5)
 

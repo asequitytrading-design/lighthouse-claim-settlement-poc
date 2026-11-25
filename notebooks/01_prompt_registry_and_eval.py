@@ -6,7 +6,6 @@
 # COMMAND ----------
 import json, logging, os, sys
 from pathlib import Path
-from mlflow.genai.scorers import Correctness, ExpectationsGuidelines, Safety
 
 PROJECT=Path.cwd().parent  # notebooks run with cwd = the notebook folder
 sys.path.insert(0,str(PROJECT/"src"))
@@ -17,10 +16,12 @@ from lighthouse_poc.gateway import build_chat_model
 from lighthouse_poc.evaluation import MLflowEvaluationService
 from lighthouse_poc.prompt_registry import MLflowPromptRegistry
 from lighthouse_poc.logging_config import configure_logging
+from lighthouse_poc.scorers import build_scorers
 
 logger=configure_logging()
 dbutils.widgets.text("prompt_name","main.default.claim_settlement_review")
 dbutils.widgets.text("model_alias","claims-medium")
+dbutils.widgets.dropdown("judge_alias","claims-judge",["claims-judge","databricks-managed-judge"])
 dbutils.widgets.text("experiment_name","/Shared/lighthouse-claim-settlement-poc")
 dbutils.widgets.text("application_version","0.1.0")
 dbutils.widgets.text("prompt_version","1")
@@ -53,14 +54,12 @@ def predict_fn(case_id:str,product_segment:str,claim_narrative:str,
                submitted_documents:list,policy_or_benefit_context:str):
     return assistant.predict(case_id,product_segment,claim_narrative,submitted_documents,
                              policy_or_benefit_context)
+scorers,judge,scorer_manifest=build_scorers(profile,"llm-judges",dbutils.widgets.get("judge_alias"),logger)
 manifest={"application_version":dbutils.widgets.get("application_version"),
           "prompt_name":name,"prompt_version":prompt_version,"model_service":model_service,
-          "dataset_version":"1.0.0","scorer_version":"correctness-safety-claims-guidelines-v1"}
-judge_model=os.getenv("MLFLOW_GENAI_JUDGE_DEFAULT_MODEL")
-judge_options={"model":judge_model} if judge_model else {}
-scorers=[Correctness(**judge_options),Safety(**judge_options),ExpectationsGuidelines(**judge_options)]
-manifest["judge_model"]=judge_model or "workspace default"
-result=MLflowEvaluationService(logger).run(records,predict_fn,scorers,manifest)
+          "dataset_version":"1.1.0",**scorer_manifest}
+with judge.activated():
+    result=MLflowEvaluationService(logger).run(records,predict_fn,scorers,manifest)
 display(result.tables)
 print("Review all cases and traces. This notebook never auto-publishes a prompt alias.")
 

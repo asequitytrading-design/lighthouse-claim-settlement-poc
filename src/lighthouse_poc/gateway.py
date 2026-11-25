@@ -2,8 +2,12 @@
 
 Both gateways expose the OpenAI chat-completions API, so one client serves both.
 What differs is configuration (base URL, route, model field, request params) and the
-injected AuthProvider. Authentication headers are produced per request so short-lived
-OAuth tokens refresh during long evaluation runs.
+injected AuthProvider.
+
+Credentials are configured on the SDK client (``default_headers`` / ``api_key``), never
+passed as per-call arguments: MLflow auto-traces OpenAI calls during evaluation and stores
+call arguments such as ``extra_headers`` in trace spans. Bearer tokens use the SDK's
+callable ``api_key`` so short-lived OAuth tokens refresh per request.
 """
 from __future__ import annotations
 
@@ -34,13 +38,25 @@ class ChatModel(Protocol):
     def complete(self, system_prompt: str, user_message: str) -> Completion: ...
 
 
+_PLACEHOLDER_API_KEY = "unused-auth-in-default-headers"
+
+
 class AuthProvider(Protocol):
-    def headers(self) -> dict[str, str]: ...
+    def headers(self) -> dict[str, str]:
+        """Request headers carrying the credential (for non-SDK callers such as judges)."""
+        ...
+
+    def client_options(self) -> dict[str, Any]:
+        """OpenAI client constructor options carrying the credential."""
+        ...
 
 
 class NoAuth:
     def headers(self) -> dict[str, str]:
         return {}
+
+    def client_options(self) -> dict[str, Any]:
+        return {"api_key": _PLACEHOLDER_API_KEY}
 
 
 class EnvHeaderAuth:
@@ -50,11 +66,20 @@ class EnvHeaderAuth:
         self._env_var, self._header, self._prefix = env_var, header, prefix
         self._env = os.environ if env is None else env
 
-    def headers(self) -> dict[str, str]:
+    def _secret(self) -> str:
         secret = self._env.get(self._env_var)
         if not secret:
             raise ConfigurationError(f"Environment variable {self._env_var} is not set")
-        return {self._header: f"{self._prefix}{secret}"}
+        return secret
+
+    def headers(self) -> dict[str, str]:
+        return {self._header: f"{self._prefix}{self._secret()}"}
+
+    def client_options(self) -> dict[str, Any]:
+        if self._header.lower() == "authorization" and self._prefix.strip().lower() == "bearer":
+            self._secret()  # fail fast when unset
+            return {"api_key": self._secret}
+        return {"api_key": _PLACEHOLDER_API_KEY, "default_headers": self.headers()}
 
 
 class DatabricksSdkAuth:
@@ -73,6 +98,16 @@ class DatabricksSdkAuth:
             except Exception as exc:
                 raise ConfigurationError("Databricks authentication is not configured") from exc
         return dict(self._config.authenticate())
+
+    def _token(self) -> str:
+        authorization = self.headers().get("Authorization", "")
+        if not authorization.lower().startswith("bearer "):
+            raise ConfigurationError("Databricks authentication did not return a bearer token")
+        return authorization.split(" ", 1)[1]
+
+    def client_options(self) -> dict[str, Any]:
+        self._token()  # fail fast with a ConfigurationError
+        return {"api_key": self._token}
 
 
 def build_auth(auth: AuthConfig) -> AuthProvider:
@@ -116,9 +151,10 @@ class GatewayChatClient:
         if client is None:
             try:
                 from openai import OpenAI
-                # Real credentials travel in per-request headers from the AuthProvider.
-                client = OpenAI(base_url=base_url, api_key="unused-see-auth-provider",
-                                timeout=timeout_seconds, max_retries=max_retries)
+                client = OpenAI(base_url=base_url, timeout=timeout_seconds,
+                                max_retries=max_retries, **auth.client_options())
+            except ConfigurationError:
+                raise
             except Exception as exc:
                 logger.exception("gateway_client_initialization_failed", extra={
                     "model_alias": route.alias, "gateway": gateway_kind,
@@ -133,7 +169,8 @@ class GatewayChatClient:
         log = {"model_alias": self._route.alias, "gateway": self._gateway_kind,
                "correlation_id": correlation_id}
         try:
-            headers = {**self._auth.headers(), "X-Correlation-ID": correlation_id}
+            # Only non-secret headers here: call arguments are recorded in MLflow traces.
+            headers = {"X-Correlation-ID": correlation_id}
             params = dict(self._route.params)
             standard = {k: params.pop(k) for k in ("temperature", "max_tokens", "top_p")
                         if k in params}
@@ -241,6 +278,9 @@ def build_chat_model(profile: Profile, alias: str | None, logger: logging.Logger
     route = profile.model(alias)
     if route.kind == "mock":
         return MockClaimModel()
+    if route.kind != "gateway":
+        raise ConfigurationError(
+            f"Model '{route.alias}' (kind {route.kind}) can only be used as an LLM judge")
     return GatewayChatClient(
         profile.base_url_for(route), route, profile.gateway.kind,
         build_auth(profile.gateway.auth), logger,

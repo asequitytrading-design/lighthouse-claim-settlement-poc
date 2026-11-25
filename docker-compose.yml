@@ -61,10 +61,11 @@ services:
       KONG_ADMIN_ACCESS_LOG: /dev/stdout
       KONG_PROXY_ERROR_LOG: /dev/stderr
       KONG_ADMIN_ERROR_LOG: /dev/stderr
-      # Local models can take minutes per request when reasoning is enabled.
-      KONG_NGINX_PROXY_PROXY_READ_TIMEOUT: "600s"
+      # Upstream timeouts are per service: see read_timeout in kong/kong.yaml.
       # Default is one worker per CPU (~70 MB each); Docker Desktop's VM defaults to 2 GB.
       KONG_NGINX_WORKER_PROCESSES: "2"
+      # pre-function (kong/kong.yaml) runs sandboxed; allow only the JSON codec it needs.
+      KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES: cjson.safe
     ports:
       # Host ports 81xx avoid clashes with common local dev servers on 8000-8002.
       - "127.0.0.1:8100:8000"   # proxy (the AI gateway endpoint)

@@ -20,6 +20,7 @@ python3 -m venv .venv && source .venv/bin/activate && python -m pip install -e '
 python scripts/register_prompt.py --profile local
 python scripts/evaluate.py --profile local --prompt-version 1 --model mock           # plumbing only
 python scripts/evaluate.py --profile local --prompt-version 1 --model claims-medium  # qwen3.5-9b via Kong
+python scripts/evaluate.py --profile local --prompt-version 1 --model claims-medium --scorer-mode llm-judges  # + gemma4 judges
 python -m pytest
 ```
 

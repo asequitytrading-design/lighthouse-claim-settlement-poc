@@ -50,8 +50,15 @@ python scripts/register_prompt.py --profile local
 python scripts/evaluate.py --profile local --prompt-version 1 --model mock           # plumbing only
 python scripts/evaluate.py --profile local --prompt-version 1 --model claims-small
 python scripts/evaluate.py --profile local --prompt-version 1 --model claims-medium
+python scripts/evaluate.py --profile local --prompt-version 1 --model claims-medium --scorer-mode llm-judges
 python -m pytest                                                                      # unit tests, no network
 ```
+
+`--scorer-mode llm-judges` runs the deterministic gates **plus** MLflow's built-in
+`Correctness`, `Safety` and `ExpectationsGuidelines` judges through Kong
+(`claims-judge` → gemma4-e4b; `--judge-model claims-judge-alt` → qwen3.5-9b).
+A 6-case run takes about 6 minutes on this machine. A case that fails (gateway error or
+contract violation) is recorded as a failed case instead of aborting the run.
 
 Each run logs its manifest as MLflow params (profile, gateway, model alias, route,
 prompt, dataset, scorer, Git commit) and tags `lighthouse.served_models` with the
@@ -83,13 +90,49 @@ Behaviours verified on Kong 3.9.3 + Ollama 0.40.16:
   `log_payloads: false` no prompt/response text and no API key appear in the logs.
   View with `docker compose logs kong`.
 
+## LLM judges via Kong
+
+MLflow judges call the gateway themselves with `openai:/<model>`; the profile supplies:
+
+| Setting | Local (Kong) | Databricks (Unity Gateway) |
+|---|---|---|
+| Model URI | `openai:/gemma4-e4b-32k:latest` (must equal Kong's pinned model) | `openai:/${UNITY_GATEWAY_JUDGE_MODEL}` |
+| Base URL (`OPENAI_API_BASE`, set only during the run) | `http://localhost:8100/ai/claims-judge` | `<host>/ai-gateway/mlflow/v1` |
+| Credential | Kong key in judge `extra_headers` | workspace bearer token as `OPENAI_API_KEY` |
+| Params | `temperature: 0`, `reasoning_effort: none` | `temperature: 0` |
+
+`--judge-model databricks-managed-judge` uses MLflow's Databricks-managed judge instead.
+
+Findings that shaped this (MLflow 3.18, Kong 3.9.3, Ollama 0.40.16):
+
+- **Dataset bug:** `Correctness` raises when a record has both `expected_facts` and
+  `expected_response`. The golden set's exact-match key is now `expected_fields` (v1.1.0).
+- **JSON mode:** MLflow judges send `response_format` and only retry without it on HTTP 400;
+  Ollama returns 501. Kong's `pre-function` on the `ollama-local` service removes the field
+  (`request-transformer` cannot: `ai-proxy` rebuilds the body from the client request). The
+  sandbox allows only `cjson.safe` (`KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES`).
+- **Timeouts:** Kong services default to a 60 s upstream read timeout and MLflow judges to
+  60 s (`MLFLOW_GENAI_EVAL_LLM_TIMEOUT`). Ollama swapping qwen3.5-9b and gemma4 in memory
+  exceeded both, so the service uses 600 s and the profile sets `judge_timeout_seconds: 600`
+  with low evaluation concurrency (`max_workers: 2`, `max_scorer_workers: 1`).
+- **Credentials and traces:** MLflow auto-traces OpenAI SDK calls during evaluation and
+  stores call arguments (including `extra_headers`) in spans. Gateway credentials are
+  therefore set on the SDK client (`default_headers` / callable `api_key`), never per call.
+- **Judges are not gates:** given a missing output (`None`), all three judges answered
+  "yes"; `Safety` also passed an output that approved a benefit. Only the deterministic
+  gates block a release; judge feedback is review evidence.
+
 ## Model notes (Ollama)
 
 - Ollama rejects `response_format: json_object` for these models (HTTP 501), so the
   contract relies on the prompt plus validation. Single Markdown code fences around
   JSON are stripped before validation; everything else is still enforced.
 - Judge: `claims-judge` → gemma4-e4b (a different family from the Qwen app models, to
-  reduce self-preference). qwen3.5-9b is the alternate. LLM-judge wiring is the next step.
+  reduce self-preference). `claims-judge-alt` → qwen3.5-9b. With reasoning on, gemma4
+  took 26 s for a trivial judgement; with `reasoning_effort: none`, 1.4 s.
+- Ollama keeps a limited number of models in memory; alternating app and judge models
+  forces reloads (one request took 111 s). Raising Ollama's `OLLAMA_MAX_LOADED_MODELS`
+  helps only if both models fit in RAM.
 
 Local MLflow does not include Unity Catalog, workspace identity or Unity Gateway; those
 are validated in the Databricks profile. Use synthetic data only.

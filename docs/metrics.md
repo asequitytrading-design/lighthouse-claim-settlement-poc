@@ -23,6 +23,10 @@ Targets are provisional and need claims-examiner/product-owner review. LLM score
 | Gateway token usage | Prompt and completion tokens per request and per evaluation run | tokens | Client log (`prompt_tokens`, `completion_tokens`); Kong `file-log` `ai.proxy.usage`; Unity Gateway usage on Databricks | Baseline first | Platform owner |
 | Gateway/trace correlation | Gateway log entries whose `X-Correlation-ID` matches an MLflow trace ID | percent | Kong `correlation_id` vs MLflow trace IDs | 100% for traced calls | Engineer |
 | Profile configuration errors | Runs that stop with `ConfigurationError` (missing variable, unknown model/profile) | count | Script exit logs (`error_category=configuration`) | 0 in CI and scheduled jobs | Engineer |
+| Judge false-pass on contract failures | Cases failing a deterministic gate that a judge still scored as passing | count per judge | Evaluation results (gate vs judge assessments per trace) | Track; never rely on judges as gates (observed: 3/3 judges passed a `None` output) | Claims SME |
+| Judge invocation errors | Judge assessments with an error instead of a value | percent | MLflow assessment `error` fields | 0% | Engineer |
+| Judge latency | Wall time per judge assessment | seconds | Evaluation run duration / Kong `file-log` for `claims-judge` | Baseline first (local gemma4: 2–17 s, longer during model swaps) | Engineer |
+| Secrets in traces | Evaluation runs whose stored traces contain a gateway credential | count | Post-run scan of the MLflow store for the active key | 0 (verified after judge run, 2026-11-25) | Platform owner |
 | Local stack memory headroom | Peak container memory as share of the Docker VM limit | percent | `docker stats` during an evaluation | < 80% (raise Docker memory if exceeded) | Engineer |
 
 For each module, feature or bug fix, record KPI change, baseline, target and measurement source in its PR/commit notes. Avoid logging raw narratives, diagnoses, death details, personal identifiers or secrets.
