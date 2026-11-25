@@ -142,7 +142,9 @@ class PromptResolver:
 def from_prompt_version(prompt, name: str, reference: str) -> ResolvedPrompt:
     return ResolvedPrompt(
         name=name, label=str(prompt.version), template=prompt.template, source="registry",
-        reference=reference, aliases=tuple(getattr(prompt, "aliases", None) or ()),
+        reference=reference,
+        aliases=tuple(sorted(set(getattr(prompt, "aliases", None) or ())
+                             | ({reference[1:]} if reference.startswith("@") else set()))),
         commit_message=getattr(prompt, "commit_message", None),
         creation_timestamp=getattr(prompt, "creation_timestamp", None),
         tags=dict(getattr(prompt, "tags", None) or {}))

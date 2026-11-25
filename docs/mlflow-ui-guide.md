@@ -166,6 +166,19 @@ lighthouse eval --spec claim_intake_triage --prompt @candidate --baseline 1 \
   BLOCKED, NEEDS WORK or READY FOR HUMAN REVIEW.
 - Repeat with `--model claims-medium` to compare models for the same prompt version.
 
+## Step 7: Record the review decision
+
+After reading the run's rationales and traces in the UI:
+
+```bash
+lighthouse promote --prompt 2 --run <run id from Evaluation runs> \
+    --reviewer "Your name, role" --rationale "What you checked and why it is acceptable"
+```
+
+Approval requires a READY FOR HUMAN REVIEW run of exactly that version. In the UI you will see
+the `champion` alias on the version under **Prompts**, the `lighthouse_approval_*` tags on the
+version and the run, and the full record under the run's **Artifacts → approvals/**.
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |

@@ -13,10 +13,12 @@ The same commands work locally (Ollama via Kong, local MLflow) and against Datab
   lighthouse --profile databricks try --prompt latest --case CSET-STD-001 --model claims-medium
   lighthouse eval --prompt file:prompts/draft.txt --baseline @champion --model claims-medium
   lighthouse eval --spec claim_intake_triage --prompt @candidate --model claims-small
+  lighthouse promote --prompt 2 --run <eval run id> --reviewer "Name, role" --rationale "..."
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import difflib
 import json
 import logging
@@ -33,6 +35,7 @@ from typing import Callable, TextIO
 from . import __version__
 from .config import Profile, apply_env_overrides, load_dotenv, require
 from .exceptions import LighthouseError
+from .approval import TAG
 from .prompts import REF_HELP, PromptResolver, ResolvedPrompt
 
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
@@ -47,6 +50,7 @@ class Context:
     registry: object
     prompt_name: str
     out: TextIO
+    tracking_client: object = None  # injectable MlflowClient (tests); default: real client
 
     @property
     def resolver(self) -> PromptResolver:
@@ -95,15 +99,34 @@ def cmd_prompt_list(ctx: Context, args) -> int:
               "scripts/register_prompt.py or iterate on a draft with file:<path>.", file=ctx.out)
         return 0
     print(f"{ctx.prompt_name}  ({len(versions)} versions, profile {ctx.profile.name})", file=ctx.out)
-    print(f"{'VERSION':<8} {'CREATED (UTC)':<17} {'ALIASES':<20} CHANGE NOTE", file=ctx.out)
+    print(f"{'VERSION':<8} {'CREATED (UTC)':<17} {'ALIASES':<20} {'REVIEW':<9} CHANGE NOTE",
+          file=ctx.out)
+    resolved = _aliases_by_version(ctx, versions)
     for index, version in enumerate(versions[: args.limit] if args.limit else versions):
-        aliases = list(getattr(version, "aliases", None) or [])
+        aliases = sorted(set(getattr(version, "aliases", None) or []) | resolved.get(str(version.version), set()))
         if index == 0:
             aliases.append("(latest)")
+        review = (getattr(version, "tags", None) or {}).get(f"{TAG}decision", "-")
         print(f"{version.version!s:<8} {_when(getattr(version, 'creation_timestamp', None)):<17} "
-              f"{' '.join(aliases) or '-':<20} {getattr(version, 'commit_message', None) or '-'}",
-              file=ctx.out)
+              f"{' '.join(aliases) or '-':<20} {review:<9} "
+              f"{getattr(version, 'commit_message', None) or '-'}", file=ctx.out)
     return 0
+
+
+def _aliases_by_version(ctx: Context, versions: list) -> dict[str, set[str]]:
+    """Unity Catalog does not return aliases with versions: resolve the alias names that
+    approval records used (plus champion) and map them to their current versions."""
+    if any(getattr(v, "aliases", None) for v in versions):
+        return {}
+    names = {"champion"} | {(getattr(v, "tags", None) or {}).get(f"{TAG}alias") for v in versions}
+    found: dict[str, set[str]] = {}
+    for name in sorted(n for n in names if n):
+        try:
+            target = ctx.registry.load_alias(ctx.prompt_name, name)
+        except LighthouseError:
+            continue  # alias not set
+        found.setdefault(str(target.version), set()).add(name)
+    return found
 
 
 def _describe(prompt: ResolvedPrompt) -> list[str]:
@@ -116,6 +139,11 @@ def _describe(prompt: ResolvedPrompt) -> list[str]:
         lines += [f"aliases:     {' '.join(prompt.aliases) or '-'}",
                   f"created:     {_when(prompt.creation_timestamp)}",
                   f"change note: {prompt.commit_message or '-'}"]
+        approval = {k[len(TAG):]: v for k, v in prompt.tags.items() if k.startswith(TAG)}
+        if approval:
+            lines.append(f"review:      {approval.get('decision')} by {approval.get('reviewer')} at "
+                         f"{approval.get('decided_at')} (run {approval.get('run_id')}, record "
+                         f"{approval.get('record_id')})")
     kind = f"chat, {len(prompt.template)} messages" if prompt.is_chat else "text"
     lines.append(f"type:        {kind}; {len(prompt.text)} chars; "
                  f"variables: {', '.join(sorted(prompt.variables)) or 'none'}")
@@ -326,10 +354,12 @@ def cmd_eval(ctx: Context, args) -> int:
         print(f"evaluating {prompt.name} {prompt.reference} -> {prompt.label} on {len(records)} "
               f"cases with {args.model or ctx.profile.default_app_model}"
               f"{'' if args.no_judges else ' + judges'} ...", file=sys.stderr)
-        return run_eval(ctx.profile, ctx.registry, ctx.logger, EvalRequest(
-            spec=spec, prompt=prompt, model_alias=args.model, records=records,
-            dataset_label=dataset_label, use_judges=not args.no_judges,
-            judge_alias=args.judge_model))
+        # MLflow prints progress and banners to stdout; keep stdout for our result (--json).
+        with contextlib.redirect_stdout(sys.stderr):
+            return run_eval(ctx.profile, ctx.registry, ctx.logger, EvalRequest(
+                spec=spec, prompt=prompt, model_alias=args.model, records=records,
+                dataset_label=dataset_label, use_judges=not args.no_judges,
+                judge_alias=args.judge_model))
 
     review, run_id = evaluate(candidate)
     result = {"candidate": {"run_id": run_id, "prompt_version": candidate.label, **review.to_dict()}}
@@ -357,6 +387,52 @@ def cmd_eval(ctx: Context, args) -> int:
         print("Scores are review evidence for a human reviewer, not an approval. Open the run "
               "in MLflow to read judge rationales per trace.", file=ctx.out)
     return 1 if review.verdict == BLOCKED else 0
+
+
+# ---------------------------------------------------------------- promote (review gate)
+def cmd_promote(ctx: Context, args) -> int:
+    from .approval import APPROVE, REJECT, ApprovalService, evidence_checks
+    from .exceptions import ConfigurationError as _ConfigurationError
+    from .rubric import load_spec
+
+    decision = REJECT if args.reject else APPROVE
+    service = ApprovalService(ctx.logger, ctx.registry, ctx.tracking_client)
+    run = service.get_run(args.run)
+    name = args.prompt_name or run.data.params.get("prompt_name") or ctx.prompt_name
+    prompt = PromptResolver(ctx.registry, name).resolve(args.prompt)
+    try:
+        current = load_spec(run.data.params.get("eval_spec", "")).scorer_version
+    except _ConfigurationError:
+        current = None
+    checks = evidence_checks(prompt, run, current, decision)
+    alias = None if args.reject else args.alias
+    record = service.build_record(prompt, run, decision, args.reviewer, args.rationale, alias, checks)
+
+    print(f"{decision.upper()} request: {prompt.name} version {prompt.label} | run {run.info.run_id}",
+          file=ctx.out)
+    for check in checks:
+        print(f"{'PASS' if check.passed else 'FAIL'}  {check.name:<20} {check.detail}", file=ctx.out)
+    print(f"evidence: verdict {record.verdict} | combined {record.combined_score} | model "
+          f"{record.model_service} | judge {record.judge_model} | dataset {record.dataset} "
+          f"{record.dataset_version} | spec {record.scorer_version}", file=ctx.out)
+    if not all(c.passed for c in checks):
+        print("Refused: the evidence does not support this decision. Nothing was written.",
+              file=ctx.out)
+        return 1
+    if decision == APPROVE:
+        print(f"alias {alias}: {record.previous_alias_version or '(unset)'} -> {prompt.label}",
+              file=ctx.out)
+    if args.dry_run:
+        print("Dry run: nothing was written.", file=ctx.out)
+        return 0
+    service.write(record)
+    print(f"Recorded {decision} {record.record_id} by {record.reviewer} at {record.decided_at} "
+          f"(run artifact approvals/{record.record_id}.json, prompt version tags).", file=ctx.out)
+    if decision == APPROVE and record.previous_alias_version:
+        print(f"Rollback: promote version {record.previous_alias_version} with its own approved "
+              "evaluation run.", file=ctx.out)
+    print("This records a prompt release decision; it is not a claim decision.", file=ctx.out)
+    return 0
 
 
 # ---------------------------------------------------------------- parser and entry point
@@ -426,7 +502,18 @@ def build_parser() -> argparse.ArgumentParser:
     evaluation.add_argument("--experiment", help="Override the profile's MLflow experiment")
     evaluation.add_argument("--json", action="store_true", help="Machine-readable result")
     evaluation.set_defaults(handler=cmd_eval)
-    for sub in (cases, trial, evaluation):
+
+    promote = commands.add_parser(
+        "promote", help="Human review gate: approve (move alias) or reject a version with evidence")
+    promote.add_argument("--prompt", required=True, help="Registered version: <version> | @<alias> | latest")
+    promote.add_argument("--run", required=True, help="Run ID of the lighthouse eval run used as evidence")
+    promote.add_argument("--reviewer", required=True, help="Reviewer name and role")
+    promote.add_argument("--rationale", required=True, help="Why (judge rationales, failures and traces reviewed)")
+    promote.add_argument("--alias", default="champion", help="Alias to move on approval (default: champion)")
+    promote.add_argument("--reject", action="store_true", help="Record a rejection; no alias change")
+    promote.add_argument("--dry-run", action="store_true", help="Run the checks and show the record only")
+    promote.set_defaults(handler=cmd_promote)
+    for sub in (cases, trial, evaluation, promote):
         _common(sub, suppress=True)
     return parser
 

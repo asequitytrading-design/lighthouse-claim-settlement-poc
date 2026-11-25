@@ -44,5 +44,9 @@ Targets are provisional and need claims-examiner/product-owner review. LLM score
 | Judge agreement score | Mean judge verdicts (yes = 1) excluding errors | percent | Run metric `lighthouse/judge_score` | Baseline first | Claims SME |
 | Judge error count | Judge assessments without a verdict | count | Run metric `lighthouse/judge_errors` | 0 | Platform owner |
 | Candidate vs baseline delta | Change in combined score between prompt versions on the same cases, model and judges | points | `lighthouse eval --baseline` output | ≥ 0 before review | Engineer |
+| Approvals with complete evidence | Approval records whose evidence checks all passed | percent | `approvals/*.json` `checks` | 100% (promote refuses otherwise) | Product owner |
+| Promotion refusals | `lighthouse promote` attempts refused, by failed check | count | CLI exit code 1 / output | Trending down; spikes show process gaps | Engineer |
+| Review turnaround | Time from evaluation run end to recorded decision | hours | run end time vs `decided_at` | Baseline first | Product owner |
+| Alias rollbacks | Approvals that move an alias back to an earlier version | count | `previous_alias_version` > new version in records | Tracked; investigate each | Product owner |
 
 For each module, feature or bug fix, record KPI change, baseline, target and measurement source in its PR/commit notes. Avoid logging raw narratives, diagnoses, death details, personal identifiers or secrets.

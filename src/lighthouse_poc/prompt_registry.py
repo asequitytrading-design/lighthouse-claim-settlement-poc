@@ -66,7 +66,23 @@ class MLflowPromptRegistry:
                 return []
             self._logger.exception("prompt_versions_lookup_failed", extra={"prompt_name": name})
             raise PromptRegistryError(f"Could not list versions of {name}") from exc
-        return sorted(versions, key=lambda v: int(v.version), reverse=True)
+        return sorted(self._with_details(client, name, versions),
+                      key=lambda v: int(v.version), reverse=True)
+
+    def _with_details(self, client, name: str, versions: list) -> list:
+        """search_prompt_versions omits aliases (MLflow server); fetch each version fully."""
+        getter = getattr(client, "get_prompt_version", None)
+        if getter is None:
+            return versions
+        detailed = []
+        for version in versions:
+            try:
+                detailed.append(getter(name, version.version))
+            except Exception:  # keep the search entry; aliases are a display detail
+                self._logger.warning("prompt_version_details_failed", exc_info=True, extra={
+                    "prompt_name": name, "prompt_version": str(version.version)})
+                detailed.append(version)
+        return detailed
 
     def load_alias(self, name: str, alias: str):
         try:

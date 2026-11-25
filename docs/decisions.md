@@ -199,3 +199,28 @@ the defaults are a starting point. Judge rationales are model-generated and are 
 trusted. A spec change produces a new `scorer_version`, so runs scored by different specs are
 not compared as equals.
 
+## ADR-009: Review gate with an evidence-bound approval record (2026-11-25)
+
+**Context.** The design requires that only an approved prompt reference reaches the agent,
+and that each decision is bound to exact versions and run evidence. An alias alone does not
+record why it moved.
+
+**Decision.**
+- `lighthouse promote` approves or rejects one registered version based on one `lighthouse eval`
+  run. Approval needs: a registered version, a finished eval run of the same name and version,
+  verdict READY FOR HUMAN REVIEW, 100% hard gates, and an unchanged spec digest. Rejection only
+  needs the run to match the version.
+- The record (`approvals/<record_id>.json`) is an artifact on the evaluation run, so every
+  decision is kept next to its evidence. `lighthouse_approval_*` tags on the run and the prompt
+  version hold the latest decision for listing. On approval, the alias moves last; the previous
+  target is recorded for rollback.
+- Reviewer and rationale are mandatory free text; the local OS user is recorded as
+  `recorded_by`. There is no identity verification in the POC.
+
+**Consequences.** Verified locally and on Unity Catalog. Unity Catalog differences that were
+found and handled: prompt tag keys cannot contain dots, and versions are returned without
+aliases (resolved through `load_alias`). Write order means a failed alias move leaves a record
+that names the intended alias; re-running promote completes it. Open: binding the reviewer to an
+authenticated identity (Databricks user or service principal) and separating the author from
+the approver, and switching consumers (the agent and the job) to `@champion`.
+

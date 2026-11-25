@@ -13,10 +13,11 @@ prompts). `--profile` selects which one. Synthetic cases only.
 | Compare two versions or a draft | `lighthouse prompt diff <old> <new>` | available |
 | Try one golden case | `lighthouse try --prompt <ref> --case <id> --model <alias>` | available |
 | Golden evaluation of a draft or version, compared with a baseline | `lighthouse eval --prompt <ref> --baseline <ref>` | available |
-| Register, approve and publish (move `@champion`) | `lighthouse prompt register`, `lighthouse promote` | planned (steps 2–3) |
+| Approve or reject a version with evidence (moves `@champion`) | `lighthouse promote` | available |
+| Register a version from the CLI | `lighthouse prompt register` | planned |
 
-Until step 3 lands, register with `scripts/register_prompt.py` (or save a version in the MLflow UI
-Playground). `scripts/evaluate.py` remains the job entry point.
+Register versions with `scripts/register_prompt.py` or by saving a version in the MLflow UI
+Playground. `scripts/evaluate.py` remains the job entry point.
 
 ## Prompt references
 
@@ -97,6 +98,47 @@ Prompts saved from the MLflow UI Playground are chat prompts (a list of messages
 `chat_prompt` adapter renders their `{{variables}}` from each record's inputs. To iterate
 on one as a file, `lighthouse prompt show <ref> --template-only > draft.json` and use
 `file:draft.json`.
+
+## Review gate: approve or reject with an approval record
+
+```bash
+lighthouse promote --prompt 2 --run <eval run id> --reviewer "A. Reviewer, claims SME" \
+    --rationale "Read all judge rationales; TRI-N06 reply wording accepted." --dry-run
+lighthouse promote --prompt 2 --run <eval run id> --reviewer "..." --rationale "..."   # approve
+lighthouse promote --prompt 2 --run <eval run id> --reviewer "..." --rationale "..." --reject
+```
+
+Approval is refused, and nothing is written, unless every evidence check passes:
+
+| Check | Meaning |
+|---|---|
+| `registered_version` | The prompt is a registered version, not a `file:` draft |
+| `eval_run` / `run_finished` | The run was created by `lighthouse eval` and finished |
+| `same_prompt` | The run evaluated exactly this prompt name and version |
+| `verdict_ready` / `hard_gates_all_pass` | Verdict READY FOR HUMAN REVIEW, 100% hard gates |
+| `spec_unchanged` | The evaluation spec is the same as when the run was scored |
+
+A rejection only needs the first four checks. `--reviewer` and `--rationale` are required
+(at least 20 characters). `--dry-run` shows the checks and the alias change without writing.
+
+The decision is written in this order (evidence first, pointer last):
+1. `approvals/<record_id>.json` on the evaluation run, with the decision, reviewer, rationale,
+   UTC time, local user, prompt name and version, alias and its previous target, model, judge,
+   dataset and version, spec digest, scores, verdict, evaluated Git commit, and the checks.
+   Every decision adds a file, so the history is kept.
+2. `lighthouse_approval_*` tags (decision, reviewer, decided_at, record_id, run_id) on the run
+   and on the prompt version, holding the latest decision. Underscore keys are used because
+   Unity Catalog prompt tags reject dots.
+3. On approval only, the alias (default `champion`) moves to the version.
+
+`lighthouse prompt list` shows a REVIEW column and the aliases. `prompt show` shows the latest
+review. To roll back, promote the earlier version again with its own READY evaluation run.
+The approval record concerns a prompt release, never a claim.
+
+Verified 2026-11-25 on the local server and on Unity Catalog (Free Edition), with throwaway
+prompts that were deleted afterwards. The test covered the refusals (wrong version, draft,
+short rationale), the dry run, approvals, the alias move from 1 to 2 with the rollback hint,
+the rejection, and the history of two records on one run.
 
 ## Against Databricks from a laptop
 
