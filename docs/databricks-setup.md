@@ -159,7 +159,8 @@ variable (for example `UNITY_GATEWAY_MEDIUM_MODEL`); nothing falls back silently
 
 The workflow runs unit tests on every push and pull request. On push to `main`, or a manual
 **Run workflow**, it validates, deploys to target `ci` (files under
-`/Workspace/Shared/.bundle/lighthouse-claim-settlement-poc/ci`) and runs the job with
+`/Workspace/Users/<CI identity>/.bundle/lighthouse-claim-settlement-poc/ci`; `/Workspace/Shared`
+is avoided because every user can write there and `validate --strict` rejects it) and runs the job with
 `app_model=mock, scorer_mode=deterministic` unless inputs say otherwise.
 
 1. GitHub → repository **Settings → Environments → New environment** `databricks`
