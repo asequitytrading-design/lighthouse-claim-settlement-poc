@@ -35,6 +35,7 @@ from lighthouse_poc.exceptions import LighthouseError  # noqa: E402
 from lighthouse_poc.gateway import ServedModelRecorder, build_chat_model  # noqa: E402
 from lighthouse_poc.logging_config import configure_logging  # noqa: E402
 from lighthouse_poc.prompt_registry import MLflowPromptRegistry  # noqa: E402
+from lighthouse_poc.prompts import PromptResolver  # noqa: E402
 from lighthouse_poc.runtime import load_runtime_profile  # noqa: E402
 from lighthouse_poc.scorers import ERROR_KEY, build_scorers  # noqa: E402
 
@@ -46,7 +47,8 @@ def parse_args():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--profile", help="Profile name or YAML path (default: $LIGHTHOUSE_PROFILE or local)")
     parser.add_argument("--prompt-name", help="Override the profile's prompt name")
-    parser.add_argument("--prompt-version", required=True)
+    parser.add_argument("--prompt-version", required=True,
+                        help="Prompt reference: <version> | @<alias> (e.g. @champion) | latest")
     parser.add_argument("--model", help="Logical app model from the profile (default: profile app_model)")
     parser.add_argument("--scorer-mode", choices=("deterministic", "llm-judges"), default="deterministic",
                         help="llm-judges = deterministic gates + Correctness, Safety, ExpectationsGuidelines")
@@ -86,9 +88,11 @@ def main() -> int:
         records = records[: args.limit] if args.limit and args.limit > 0 else records
 
         model = ServedModelRecorder(build_chat_model(profile, route.alias, logger))
-        assistant = ClaimSettlementAssistant(MLflowPromptRegistry(logger), model, logger,
-                                             prompt_name, args.prompt_version,
-                                             args.application_version)
+        registry = MLflowPromptRegistry(logger)
+        prompt = PromptResolver(registry, prompt_name).resolve(args.prompt_version)
+        args.prompt_version = prompt.label  # lineage records the resolved version number
+        assistant = ClaimSettlementAssistant(registry, model, logger, prompt_name, prompt.label,
+                                             args.application_version, prompt=prompt)
         scorers, judge, scorer_manifest = build_scorers(
             profile, args.scorer_mode, args.judge_model, logger)
 

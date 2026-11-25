@@ -222,5 +222,25 @@ found and handled: prompt tag keys cannot contain dots, and versions are returne
 aliases (resolved through `load_alias`). Write order means a failed alias move leaves a record
 that names the intended alias; re-running promote completes it. Open: binding the reviewer to an
 authenticated identity (Databricks user or service principal) and separating the author from
-the approver, and switching consumers (the agent and the job) to `@champion`.
+the approver.
+
+## ADR-010: Consumers load @champion and fail closed; the job evaluates against it (2026-11-25)
+
+**Context.** Approval only matters if consumers use the approved version. The job still
+evaluated a fixed, just-registered version.
+
+**Decision.**
+- The agent serves `<prompt>@champion` (`published_assistant`). Without an approved version it
+  raises a `ConfigurationError`; there is no fallback to `latest` or a fixed number, because
+  that would serve an unreviewed prompt.
+- `lighthouse try` and the notebook default to `@champion`; scripts accept references.
+- The job keeps testing what Git changed, while also checking the published version. The job's
+  `evaluate` task runs `lighthouse eval` on the registered version with `--baseline @champion
+  --baseline-optional`: the champion is re-scored on every run (regression after gateway or
+  model changes), and the candidate's run is the evidence `lighthouse promote` needs. With no
+  champion yet, or when the champion is that same version, the baseline is skipped with a
+  notice. A BLOCKED candidate fails the task.
+
+**Consequences.** The first approval on each environment is a manual `promote` (by design). The
+job's runtime roughly doubles once a champion exists and differs from the candidate.
 

@@ -48,5 +48,7 @@ Targets are provisional and need claims-examiner/product-owner review. LLM score
 | Promotion refusals | `lighthouse promote` attempts refused, by failed check | count | CLI exit code 1 / output | Trending down; spikes show process gaps | Engineer |
 | Review turnaround | Time from evaluation run end to recorded decision | hours | run end time vs `decided_at` | Baseline first | Product owner |
 | Alias rollbacks | Approvals that move an alias back to an earlier version | count | `previous_alias_version` > new version in records | Tracked; investigate each | Product owner |
+| Published prompt availability | Agent or `try` starts that find an approved `@champion` | percent | `published_prompt_loaded` log vs fail-closed `ConfigurationError` | 100% after the first approval per environment | Platform owner |
+| Champion regression | Job runs where the `@champion` baseline stays READY FOR HUMAN REVIEW | percent | `evaluate` task baseline run verdict | 100%; a drop means the gateway, model or data changed under the published prompt | Engineer |
 
 For each module, feature or bug fix, record KPI change, baseline, target and measurement source in its PR/commit notes. Avoid logging raw narratives, diagnoses, death details, personal identifiers or secrets.

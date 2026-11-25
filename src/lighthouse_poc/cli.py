@@ -270,10 +270,14 @@ def try_case(ctx: Context, prompt: ResolvedPrompt, record: dict, model_alias: st
 def cmd_try(ctx: Context, args) -> int:
     import mlflow
 
+    from .agent import PUBLISHED_ALIAS, load_published_prompt
     from .evaluation import load_golden_records
     from .scorers import ERROR_KEY
 
-    prompt = ctx.resolver.resolve(args.prompt)
+    if args.prompt == f"@{PUBLISHED_ALIAS}":  # the agent's published version; fails closed
+        prompt = load_published_prompt(ctx.registry, ctx.prompt_name)
+    else:
+        prompt = ctx.resolver.resolve(args.prompt)
     record = find_case(load_golden_records(args.dataset), args.case)
     mlflow.set_experiment(args.experiment or require(ctx.profile.experiment, "mlflow.experiment"))
     result = try_case(ctx, prompt, record, args.model)
@@ -344,7 +348,21 @@ def cmd_eval(ctx: Context, args) -> int:
     name = args.prompt_name or qualify_prompt_name(ctx.profile.prompt_name, spec.prompt_name)
     resolver = PromptResolver(ctx.registry, name)
     candidate = resolver.resolve(args.prompt)
-    baseline = resolver.resolve(args.baseline) if args.baseline else None
+    baseline = None
+    if args.baseline:
+        try:
+            baseline = resolver.resolve(args.baseline)
+        except LighthouseError as exc:
+            if not args.baseline_optional:
+                raise
+            print(f"baseline {args.baseline} not available ({exc}); evaluating the candidate only",
+                  file=sys.stderr)
+        if baseline is not None and not baseline.is_draft and baseline.label == candidate.label:
+            print(f"baseline {args.baseline} is the candidate version {candidate.label}; "
+                  "evaluating it once", file=sys.stderr)
+            baseline = None
+    if args.scorer_mode == "deterministic":
+        args.no_judges = True
     mlflow.set_experiment(args.experiment or require(ctx.profile.experiment, "mlflow.experiment"))
     records, dataset_label = load_records(spec, args.dataset)
     if args.limit and args.limit > 0:
@@ -479,7 +497,8 @@ def build_parser() -> argparse.ArgumentParser:
     cases.set_defaults(handler=cmd_cases)
 
     trial = commands.add_parser("try", help="Run one golden case with a prompt and model")
-    trial.add_argument("--prompt", required=True, help=REF_HELP)
+    trial.add_argument("--prompt", default="@champion",
+                       help=f"{REF_HELP} (default: @champion, the published version)")
     trial.add_argument("--case", required=True, help="Golden case ID (see: lighthouse cases)")
     trial.add_argument("--model", help="Logical app model from the profile (default: profile app_model)")
     trial.add_argument("--dataset", help="Golden JSONL (default: data/golden_eval_dataset.jsonl)")
@@ -495,8 +514,14 @@ def build_parser() -> argparse.ArgumentParser:
                                            "(default: the profile prompt's spec)")
     evaluation.add_argument("--model", help="Logical app model from the profile (default: profile app_model)")
     evaluation.add_argument("--judge-model", help="Logical judge model (default: profile judge_model)")
+    evaluation.add_argument("--baseline-optional", action="store_true",
+                            help="Skip the baseline (with a notice) when it cannot be resolved, "
+                                 "e.g. @champion before the first approval")
     evaluation.add_argument("--no-judges", action="store_true",
                             help="Deterministic gates and rubric only (fast; combined = rubric)")
+    evaluation.add_argument("--scorer-mode", choices=("deterministic", "llm-judges"),
+                            default="llm-judges",
+                            help="Job-friendly form of --no-judges (deterministic = no judges)")
     evaluation.add_argument("--dataset", help="Override: golden JSONL path or mlflow:<dataset name>")
     evaluation.add_argument("--limit", type=int, default=0, help="Evaluate only the first N cases")
     evaluation.add_argument("--experiment", help="Override the profile's MLflow experiment")

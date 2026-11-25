@@ -55,10 +55,24 @@ def test_env_overrides_cover_every_profile_variable():
     assert not any(k in passed for k in ("DATABRICKS_TOKEN", "KONG_API_KEY"))  # no secrets
 
 
-def test_evaluate_consumes_registered_prompt_version():
+def test_evaluate_scores_registered_version_against_champion():
     params = TASKS["evaluate"]["spark_python_task"]["parameters"]
-    assert params[params.index("--prompt-version") + 1] == (
-        "{{tasks.register_prompt.values.prompt_version}}")
+    assert TASKS["evaluate"]["spark_python_task"]["python_file"].endswith("scripts/lighthouse.py")
+    command = params[params.index("eval"):]
+    assert command[command.index("--prompt") + 1] == "{{tasks.register_prompt.values.prompt_version}}"
+    assert command[command.index("--baseline") + 1] == "@champion"
+    assert "--baseline-optional" in command                  # first deploy: no champion yet
+    assert command[command.index("--scorer-mode") + 1] == "{{job.parameters.scorer_mode}}"
+    # Global options (profile, --env) come before the subcommand.
+    assert params.index("--profile") < params.index("eval")
+    assert max(i for i, p in enumerate(params) if p == "--env") < params.index("eval")
+    from lighthouse_poc.cli import build_parser
+    # Substitute what Databricks fills in: job parameter defaults and the task value.
+    values = {f"{{{{job.parameters.{p['name']}}}}}": p["default"] for p in JOB["parameters"]}
+    values["{{tasks.register_prompt.values.prompt_version}}"] = "3"
+    args = build_parser().parse_args([values.get(p, p) for p in params])
+    assert args.scorer_mode == "deterministic" and args.model == "mock" and args.prompt == "3"
+    assert args.command == "eval" and args.profile == "databricks" and args.baseline_optional
     register = TASKS["register_prompt"]["spark_python_task"]["parameters"]
     assert register[register.index("--task-value-key") + 1] == "prompt_version"
     assert "--if-changed" in register

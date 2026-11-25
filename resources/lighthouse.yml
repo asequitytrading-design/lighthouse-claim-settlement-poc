@@ -15,7 +15,9 @@ resources:
       name: lighthouse-prompt-eval-${bundle.target}
       description: >-
         Registers the claim-settlement prompt in Unity Catalog (only when the template
-        changed) and evaluates it on the versioned synthetic golden set. Administrative,
+        changed) and evaluates it on the versioned synthetic golden set against the
+        published @champion version (hard gates + rubric + judges -> review score).
+        Approval is a separate human step (lighthouse promote). Administrative,
         non-decisional POC; a human examiner makes all settlement decisions.
       max_concurrent_runs: 1        # Free Edition: max 5 concurrent job tasks per account
       timeout_seconds: 3600
@@ -66,25 +68,20 @@ resources:
               - --env
               - LIGHTHOUSE_SCHEMA=${resources.schemas.lighthouse.name}
 
+        # Evaluates the version register_prompt produced (new or unchanged) with the
+        # published @champion as baseline: champion regression on every run, and the
+        # candidate's run is the evidence `lighthouse promote` needs. Before the first
+        # approval there is no @champion and the baseline is skipped with a notice.
+        # A BLOCKED candidate fails the task.
         - task_key: evaluate
           depends_on:
             - task_key: register_prompt
           environment_key: lighthouse
           spark_python_task:
-            python_file: ../scripts/evaluate.py
+            python_file: ../scripts/lighthouse.py
             parameters:
               - --profile
               - databricks
-              - --prompt-version
-              - "{{tasks.register_prompt.values.prompt_version}}"
-              - --model
-              - "{{job.parameters.app_model}}"
-              - --scorer-mode
-              - "{{job.parameters.scorer_mode}}"
-              - --judge-model
-              - "{{job.parameters.judge_model}}"
-              - --limit
-              - "{{job.parameters.limit}}"
               - --env
               - LIGHTHOUSE_CATALOG=${var.catalog}
               - --env
@@ -99,3 +96,17 @@ resources:
               - UNITY_GATEWAY_MEDIUM_MODEL=${var.medium_model_service}
               - --env
               - UNITY_GATEWAY_JUDGE_MODEL=${var.judge_model_service}
+              - eval
+              - --prompt
+              - "{{tasks.register_prompt.values.prompt_version}}"
+              - --baseline
+              - "@champion"
+              - --baseline-optional
+              - --model
+              - "{{job.parameters.app_model}}"
+              - --scorer-mode
+              - "{{job.parameters.scorer_mode}}"
+              - --judge-model
+              - "{{job.parameters.judge_model}}"
+              - --limit
+              - "{{job.parameters.limit}}"

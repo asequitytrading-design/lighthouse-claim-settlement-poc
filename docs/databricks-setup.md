@@ -11,13 +11,13 @@ Synthetic data only.
 |---|---|
 | Unity Catalog schema for prompts | Bundle (`resources.schemas.lighthouse`) |
 | MLflow experiment | Bundle (`resources.experiments.lighthouse_eval`) |
-| Serverless job: register prompt → evaluate | Bundle (`resources.jobs.lighthouse_prompt_eval`) |
+| Serverless job: register prompt → evaluate against `@champion` | Bundle (`resources.jobs.lighthouse_prompt_eval`) |
 | Prompt version only when the template changes | `register_prompt.py --if-changed`, passed to the next task as a task value |
 | Tests, validate, deploy, smoke run on push to `main` | GitHub Actions (`.github/workflows/databricks-bundle.yml`) |
 | Workspace creation, sign-in, catalog check | Manual (steps 1–2) |
 | CLI authentication / CI identity and secrets | Manual (steps 3 and 7) |
 | Unity Gateway model services and permissions | Manual (step 6) |
-| Approving and publishing a prompt version | Manual human review (by design) |
+| Approving and publishing a prompt version (`@champion`) | Manual human review with `lighthouse promote` (by design) |
 
 ## 1. Create the workspace
 
@@ -86,6 +86,30 @@ the `register_prompt` task: versions are only created when `prompts/` changes.
 
 Verified on a Free Edition workspace on 2026-11-25 (catalog `workspace`, schema creation
 allowed, serverless environment 5, Unity Catalog prompts, 6/6 cases with traces).
+
+## 4b. What the job evaluates, and publishing with @champion
+
+The `evaluate` task runs `scripts/lighthouse.py eval` (the `lighthouse eval` command). It scores
+the version that `register_prompt` produced (new or unchanged) with hard gates, the weighted
+rubric and, with `scorer_mode=llm-judges`, the judges. It uses the published version
+`@champion` as the baseline, so every run is also a regression check of what the agent serves.
+Before the first approval there is no `@champion`, and the task logs `baseline @champion not
+available ... evaluating the candidate only`. A BLOCKED candidate fails the task.
+
+To publish, review the candidate's run in the experiment and record the decision from a
+laptop (CLI profile authentication):
+
+```bash
+export DATABRICKS_CONFIG_PROFILE=lighthouse LIGHTHOUSE_PROFILE=databricks
+export LIGHTHOUSE_SCHEMA=dev_<you>_lighthouse          # or lighthouse for the ci target
+lighthouse prompt list
+lighthouse promote --prompt <version> --run <evaluate task's run id> \
+    --reviewer "Name, role" --rationale "What was reviewed"
+```
+
+The agent (`published_assistant`), `lighthouse try` by default and the notebook load
+`<catalog>.<schema>.claim_settlement_review@champion`. They **fail closed** when no version is
+approved; they never fall back to `latest`.
 
 ## 5. Evaluate with LLM judges (Databricks-managed judge)
 

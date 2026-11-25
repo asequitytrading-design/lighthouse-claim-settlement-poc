@@ -11,7 +11,7 @@ prompts). `--profile` selects which one. Synthetic cases only.
 | Read one version, an alias or a draft | `lighthouse prompt show <ref>` | available |
 | Start a draft from an existing version | `lighthouse prompt show 3 --template-only > prompts/draft.txt` | available |
 | Compare two versions or a draft | `lighthouse prompt diff <old> <new>` | available |
-| Try one golden case | `lighthouse try --prompt <ref> --case <id> --model <alias>` | available |
+| Try one golden case | `lighthouse try --case <id> --model <alias> [--prompt <ref>]` (default `@champion`) | available |
 | Golden evaluation of a draft or version, compared with a baseline | `lighthouse eval --prompt <ref> --baseline <ref>` | available |
 | Approve or reject a version with evidence (moves `@champion`) | `lighthouse promote` | available |
 | Register a version from the CLI | `lighthouse prompt register` | planned |
@@ -139,6 +139,18 @@ Verified 2026-11-25 on the local server and on Unity Catalog (Free Edition), wit
 prompts that were deleted afterwards. The test covered the refusals (wrong version, draft,
 short rationale), the dry run, approvals, the alias move from 1 to 2 with the rollback hint,
 the rejection, and the history of two records on one run.
+
+## What the agent and the job load
+
+- **Agent:** `published_assistant()` (in `src/lighthouse_poc/agent.py`) serves
+  `<prompt>@champion`. When no version has been approved, it raises a `ConfigurationError` that
+  names `lighthouse eval` and `lighthouse promote`. It never falls back to `latest` or a fixed
+  number.
+- **`lighthouse try`** and the notebook default to `@champion`; pass `--prompt` for anything else.
+- **Job:** `register_prompt` registers a version when the template changed, then `evaluate`
+  runs `lighthouse eval --prompt <that version> --baseline @champion --baseline-optional`. The
+  candidate's run is the evidence for `promote`, and the champion is re-scored on every run.
+- `scripts/evaluate.py --prompt-version` also accepts references (`@champion`, `latest`).
 
 ## Against Databricks from a laptop
 

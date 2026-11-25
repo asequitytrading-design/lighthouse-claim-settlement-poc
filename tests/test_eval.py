@@ -269,3 +269,75 @@ def test_eval_command_reports_and_exits_on_blocked(tracing_on, tmp_path, monkeyp
                      "--experiment", "/lighthouse-eval-cli-test"],
                     out=out2, context_factory=lambda args, o: ctx2)
     assert code == 1 and BLOCKED in out2.getvalue()
+
+
+# ---------------------------------------------------------------- published prompt (@champion)
+class AliasRegistry:
+    def __init__(self, champion=None):
+        self.champion = champion
+
+    def load_alias(self, name, alias):
+        from types import SimpleNamespace
+
+        from lighthouse_poc.exceptions import PromptRegistryError
+        if self.champion is None:
+            raise PromptRegistryError("alias missing")
+        return SimpleNamespace(version=self.champion, template="Published.", aliases=[alias],
+                               commit_message="c", creation_timestamp=None, tags={})
+
+    def load(self, name, version):
+        from types import SimpleNamespace
+        return SimpleNamespace(version=version, template="v", aliases=[], commit_message="c",
+                               creation_timestamp=None, tags={})
+
+
+def test_published_assistant_serves_champion_and_fails_closed():
+    from lighthouse_poc.agent import published_assistant
+    model = Scripted(json.dumps({"claim_id": "C", "product_segment": "dental", "summary": "s",
+                                 "benefit_determination": "Not determined",
+                                 **{k: [] for k in ("key_facts", "evidence_received",
+                                                    "evidence_to_confirm", "inconsistencies",
+                                                    "recommended_examiner_actions", "risk_flags")}}))
+    assistant = published_assistant(AliasRegistry(champion=4), model, LOGGER, "p", "0.5.0")
+    assistant.predict("C", "dental", "n", [], "c")
+    assert model.messages[0][0]["content"] == "Published."
+    with pytest.raises(ConfigurationError, match="lighthouse promote"):
+        published_assistant(AliasRegistry(champion=None), model, LOGGER, "p", "0.5.0")
+
+
+def test_try_defaults_to_the_published_version():
+    args = cli.build_parser().parse_args(["try", "--case", "CSET-STD-001"])
+    assert args.prompt == "@champion"
+
+
+def _eval_with(registry, argv, tracing_on_fixture=None):
+    import mlflow
+    mlflow.set_experiment("/lighthouse-eval-baseline-test")
+    out = io.StringIO()
+    ctx = cli.Context(load_profile("local", env={}), LOGGER, registry, "claim_settlement_review", out)
+    code = cli.main(["eval", "--model", "mock", "--no-judges", "--limit", "1",
+                     "--experiment", "/lighthouse-eval-baseline-test", *argv],
+                    out=out, context_factory=lambda args, o: ctx)
+    return code, out.getvalue()
+
+
+def test_optional_baseline_is_skipped_when_champion_is_missing(tracing_on, capsys):
+    code, out = _eval_with(AliasRegistry(champion=None),
+                           ["--prompt", "3", "--baseline", "@champion", "--baseline-optional"])
+    assert code == 0 and "baseline" not in out.split("verdict")[-1].lower()
+    assert "not available" in capsys.readouterr().err
+    code, _ = _eval_with(AliasRegistry(champion=None), ["--prompt", "3", "--baseline", "@champion"])
+    assert code == 2                                     # required baseline: configuration error
+
+
+def test_baseline_equal_to_candidate_runs_once(tracing_on, capsys):
+    code, out = _eval_with(AliasRegistry(champion=3),
+                           ["--prompt", "3", "--baseline", "@champion", "--baseline-optional"])
+    assert code == 0 and "evaluating it once" in capsys.readouterr().err
+    assert "combined score change" not in out
+
+
+def test_baseline_champion_is_compared(tracing_on):
+    code, out = _eval_with(AliasRegistry(champion=2),
+                           ["--prompt", "3", "--baseline", "@champion", "--scorer-mode", "deterministic"])
+    assert code == 0 and "baseline @champion (2)" in out and "combined score change: +0.0" in out

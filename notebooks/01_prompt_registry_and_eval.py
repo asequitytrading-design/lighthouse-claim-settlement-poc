@@ -15,6 +15,7 @@ from lighthouse_poc.config import load_profile
 from lighthouse_poc.gateway import build_chat_model
 from lighthouse_poc.evaluation import MLflowEvaluationService
 from lighthouse_poc.prompt_registry import MLflowPromptRegistry
+from lighthouse_poc.prompts import PromptResolver
 from lighthouse_poc.logging_config import configure_logging
 from lighthouse_poc.scorers import build_scorers
 
@@ -24,7 +25,7 @@ dbutils.widgets.text("model_alias","claims-medium")
 dbutils.widgets.dropdown("judge_alias","claims-judge",["claims-judge","databricks-managed-judge"])
 dbutils.widgets.text("experiment_name","/Shared/lighthouse-claim-settlement-poc")
 dbutils.widgets.text("application_version","0.1.0")
-dbutils.widgets.text("prompt_version","1")
+dbutils.widgets.text("prompt_version","@champion")  # <version> | @<alias> | latest
 dbutils.widgets.text("register_new_prompt","false")
 name=dbutils.widgets.get("prompt_name").strip()
 profile=load_profile("databricks")
@@ -34,7 +35,8 @@ registry=MLflowPromptRegistry(logger)
 
 # COMMAND ----------
 # To create a version, set register_new_prompt=true and supply a change note below.
-# Otherwise the evaluation loads the explicitly selected version and will not create a new one.
+# Otherwise the evaluation loads the selected reference (default @champion, the approved
+# version) and will not create a new one.
 if dbutils.widgets.get("register_new_prompt").strip().lower()=="true":
     template=(PROJECT/"prompts"/"claim_settlement_v1.txt").read_text(encoding="utf-8")
     prompt=registry.register(name,template,"Synthetic claim settlement preparation prompt",
@@ -42,14 +44,16 @@ if dbutils.widgets.get("register_new_prompt").strip().lower()=="true":
     prompt_version=prompt.version
 else:
     prompt_version=dbutils.widgets.get("prompt_version").strip()
-print({"prompt_name":name,"prompt_version":prompt_version})
+resolved=PromptResolver(registry,name).resolve(str(prompt_version))
+prompt_version=resolved.label
+print({"prompt_name":name,"prompt_reference":resolved.reference,"prompt_version":prompt_version})
 
 # COMMAND ----------
 with (PROJECT/"data"/"golden_eval_dataset.jsonl").open(encoding="utf-8") as f:
     records=[json.loads(line) for line in f if line.strip()]
 model=build_chat_model(profile,model_service,logger)
 assistant=ClaimSettlementAssistant(registry,model,logger,name,prompt_version,
-                      dbutils.widgets.get("application_version"))
+                      dbutils.widgets.get("application_version"),prompt=resolved)
 def predict_fn(case_id:str,product_segment:str,claim_narrative:str,
                submitted_documents:list,policy_or_benefit_context:str):
     return assistant.predict(case_id,product_segment,claim_narrative,submitted_documents,
