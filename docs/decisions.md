@@ -92,3 +92,15 @@ with prompts.
 
 **Consequences.** Offline checks cover schema validity (CLI JSON schema) and bundle/code
 consistency (tests/test_databricks_bundle.py); `databricks bundle validate` needs a workspace.
+
+**Verified on Free Edition (2026-11-25, CLI 1.24.0, target dev).** Catalog `workspace`; the
+bundle created the schema, experiment and job; serverless environment version 5 installed the
+dependencies; prompts registered in Unity Catalog; the mock/deterministic run passed 6/6 with
+lineage params, linked prompt version and 6 traces. Fixes found by the first deploy:
+- `${workspace.host}` resolves empty when the host comes from a CLI profile; scripts now resolve
+  `DATABRICKS_HOST` from databricks-sdk auth (`runtime.load_runtime_profile`).
+- Serverless runs scripts in an IPython runner where `sys.exit(0)` raises `SystemExit` and fails
+  the task; scripts exit only on failure.
+- Unity Catalog has no implicit `@latest` prompt alias (NOT_FOUND), which was misread as a
+  missing prompt and created identical versions 1–3; `latest()` now uses
+  `search_prompt_versions`. Re-runs report `Unchanged`.

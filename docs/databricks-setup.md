@@ -81,7 +81,11 @@ Check the result in the workspace:
    (profile, prompt version, model alias, dataset 1.1.0, Git commit) and traces per case.
 
 The mock run proves registry, job wiring, tracking and deterministic gates on Databricks. It
-says nothing about model quality.
+says nothing about model quality. A second run should log `Unchanged prompt ... version N` in
+the `register_prompt` task: versions are only created when `prompts/` changes.
+
+Verified on a Free Edition workspace on 2026-11-25 (catalog `workspace`, schema creation
+allowed, serverless environment 5, Unity Catalog prompts, 6/6 cases with traces).
 
 ## 5. Evaluate with LLM judges (Databricks-managed judge)
 

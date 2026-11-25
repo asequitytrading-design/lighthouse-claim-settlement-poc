@@ -21,7 +21,7 @@ from lighthouse_poc.config import (apply_env_overrides, load_dotenv,  # noqa: E4
 from lighthouse_poc.exceptions import LighthouseError  # noqa: E402
 from lighthouse_poc.logging_config import configure_logging  # noqa: E402
 from lighthouse_poc.prompt_registry import MLflowPromptRegistry  # noqa: E402
-from lighthouse_poc.runtime import publish_task_value  # noqa: E402
+from lighthouse_poc.runtime import load_runtime_profile, publish_task_value  # noqa: E402
 
 
 def main() -> int:
@@ -42,7 +42,7 @@ def main() -> int:
     load_dotenv(PROJECT / ".env")
     try:
         apply_env_overrides(args.env)
-        profile = load_profile(args.profile)
+        profile = load_runtime_profile(args.profile, logger)
         mlflow.set_tracking_uri(require(profile.tracking_uri, "mlflow.tracking_uri"))
         if profile.registry_uri:
             mlflow.set_registry_uri(profile.registry_uri)
@@ -67,4 +67,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Exit only on failure: Databricks serverless runs scripts in an IPython runner where
+    # even sys.exit(0) raises SystemExit and marks the task as failed.
+    exit_code = main()
+    if exit_code:
+        sys.exit(exit_code)

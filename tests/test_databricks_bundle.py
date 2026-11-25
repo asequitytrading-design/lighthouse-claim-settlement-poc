@@ -11,7 +11,7 @@ import yaml
 from lighthouse_poc.config import apply_env_overrides, load_profile
 from lighthouse_poc.exceptions import ConfigurationError, PromptRegistryError
 from lighthouse_poc.prompt_registry import MLflowPromptRegistry
-from lighthouse_poc.runtime import publish_task_value
+from lighthouse_poc.runtime import ensure_databricks_host, publish_task_value
 
 ROOT = Path(__file__).resolve().parents[1]
 LOGGER = logging.getLogger("test")
@@ -47,9 +47,10 @@ def test_env_overrides_cover_every_profile_variable():
     profile_text = (ROOT / "config" / "profiles" / "databricks.yaml").read_text()
     profile_vars = set(re.findall(r"\$\{([A-Z_]+)", profile_text))
     passed = {pair.split("=", 1)[0] for pair in env_args(TASKS["evaluate"])}
-    # Everything the profile reads must be supplied by the job, except GIT_COMMIT (script)
-    # which is extra lineage.
-    assert profile_vars <= passed, profile_vars - passed
+    # Everything the profile reads must be supplied by the job; DATABRICKS_HOST is resolved
+    # at runtime from databricks-sdk auth, GIT_COMMIT is extra lineage for the script.
+    assert profile_vars - {"DATABRICKS_HOST"} <= passed, profile_vars - passed
+    assert "DATABRICKS_HOST" not in passed  # ${workspace.host} is empty with CLI-profile auth
     assert passed - profile_vars <= {"GIT_COMMIT"}
     assert not any(k in passed for k in ("DATABRICKS_TOKEN", "KONG_API_KEY"))  # no secrets
 
@@ -80,46 +81,73 @@ def test_empty_override_counts_as_unset_for_profiles():
 
 
 # ---------------------------------------------------------------- registry idempotency
-class FakePromptApi:
-    def __init__(self, latest=None, error=None):
-        self.latest, self.error, self.registered = latest, error, []
+class Page(list):
+    def __init__(self, items, token=None):
+        super().__init__(items)
+        self.token = token
 
-    def load_prompt(self, name_or_uri):
+
+class FakePromptApi:
+    """Fakes MlflowClient.search_prompt_versions plus mlflow.genai load/register."""
+
+    def __init__(self, templates=None, pages=None, error=None):
+        self.templates = templates or {}          # version -> template
+        self.pages = pages                        # optional explicit paging
+        self.error, self.registered, self.searched = error, [], []
+
+    def search_prompt_versions(self, name, max_results=None, page_token=None):
+        self.searched.append(page_token)
         if self.error:
             raise self.error
-        if self.latest is None:
+        if not self.templates:
             from mlflow.exceptions import MlflowException
             from mlflow.protos.databricks_pb2 import RESOURCE_DOES_NOT_EXIST
             raise MlflowException("missing", error_code=RESOURCE_DOES_NOT_EXIST)
-        return self.latest
+        if self.pages:
+            return self.pages[page_token]
+        return Page([SimpleNamespace(version=str(v)) for v in self.templates])
+
+    def load_prompt(self, name_or_uri):
+        version = int(name_or_uri.rsplit("/", 1)[1])
+        return SimpleNamespace(version=version, template=self.templates[version])
 
     def register_prompt(self, name, template, commit_message, tags):
         self.registered.append(template)
-        return SimpleNamespace(version=len(self.registered) + 1)
+        return SimpleNamespace(version=max(self.templates, default=0) + len(self.registered))
 
 
 @pytest.fixture
 def prompt_api(monkeypatch):
     def install(api):
+        monkeypatch.setattr("mlflow.MlflowClient", lambda: api)
         monkeypatch.setattr("mlflow.genai.load_prompt", api.load_prompt)
         monkeypatch.setattr("mlflow.genai.register_prompt", api.register_prompt)
         return api
     return install
 
 
-def test_register_if_changed_reuses_identical_template(prompt_api):
-    api = prompt_api(FakePromptApi(latest=SimpleNamespace(version=4, template="same")))
+def test_register_if_changed_reuses_identical_latest_template(prompt_api):
+    # Versions arrive unordered; the highest one is compared.
+    api = prompt_api(FakePromptApi(templates={1: "old", 4: "same", 2: "older"}))
     ref, created = MLflowPromptRegistry(LOGGER).register_if_changed("c.s.p", "same", "note")
     assert (ref.version, created, api.registered) == ("4", False, [])
 
 
 def test_register_if_changed_creates_version_for_new_or_changed(prompt_api):
-    api = prompt_api(FakePromptApi(latest=SimpleNamespace(version=4, template="old")))
+    api = prompt_api(FakePromptApi(templates={4: "old"}))
     _, created = MLflowPromptRegistry(LOGGER).register_if_changed("c.s.p", "new", "note")
     assert created and api.registered == ["new"]
-    api = prompt_api(FakePromptApi(latest=None))
+    api = prompt_api(FakePromptApi(templates={}))
     _, created = MLflowPromptRegistry(LOGGER).register_if_changed("c.s.p", "first", "note")
     assert created and api.registered == ["first"]
+
+
+def test_latest_follows_pagination(prompt_api):
+    pages = {None: Page([SimpleNamespace(version="1")], token="t2"),
+             "t2": Page([SimpleNamespace(version="7")])}
+    api = prompt_api(FakePromptApi(templates={1: "a", 7: "b"}, pages=pages))
+    assert MLflowPromptRegistry(LOGGER).latest("c.s.p").version == 7
+    assert api.searched == [None, "t2"]
 
 
 def test_registry_lookup_errors_are_not_treated_as_missing(prompt_api):
@@ -144,3 +172,22 @@ def test_publish_task_value_uses_dbutils(monkeypatch):
     monkeypatch.setitem(sys.modules, "databricks.sdk.runtime", fake)
     publish_task_value("prompt_version", "3", LOGGER)
     assert calls == [("prompt_version", "3")]
+
+
+# ---------------------------------------------------------------- workspace host
+def test_ensure_databricks_host_uses_sdk_when_unset():
+    env = {}
+    ensure_databricks_host(LOGGER, env, lambda: SimpleNamespace(host="https://h.example/"))
+    assert env == {"DATABRICKS_HOST": "https://h.example"}
+    env = {"DATABRICKS_HOST": "https://explicit"}
+    ensure_databricks_host(LOGGER, env, lambda: SimpleNamespace(host="https://other"))
+    assert env["DATABRICKS_HOST"] == "https://explicit"
+
+
+def test_ensure_databricks_host_errors_are_typed():
+    def broken():
+        raise RuntimeError("no auth")
+    with pytest.raises(ConfigurationError):
+        ensure_databricks_host(LOGGER, {}, broken)
+    with pytest.raises(ConfigurationError):
+        ensure_databricks_host(LOGGER, {}, lambda: SimpleNamespace(host=None))

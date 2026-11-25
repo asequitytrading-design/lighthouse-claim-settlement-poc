@@ -92,8 +92,6 @@ resources:
               - --env
               - LIGHTHOUSE_EXPERIMENT=${resources.experiments.lighthouse_eval.name}
               - --env
-              - DATABRICKS_HOST=${workspace.host}
-              - --env
               - GIT_COMMIT=${bundle.git.commit}
               - --env
               - UNITY_GATEWAY_SMALL_MODEL=${var.small_model_service}

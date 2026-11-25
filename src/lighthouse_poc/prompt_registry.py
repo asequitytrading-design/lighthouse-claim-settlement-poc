@@ -34,17 +34,30 @@ class MLflowPromptRegistry:
             raise PromptRegistryError(f"Could not register {name}") from exc
 
     def latest(self, name: str):
-        """Latest registered version, or None when the prompt does not exist yet."""
+        """Highest registered version, or None when the prompt does not exist yet.
+
+        Uses search_prompt_versions rather than the ``@latest`` alias: Unity Catalog has no
+        implicit ``latest`` alias and answers NOT_FOUND, which is indistinguishable from a
+        missing prompt. A missing prompt raises RESOURCE_DOES_NOT_EXIST (MLflow server) or
+        NOT_FOUND (Unity Catalog) from the search itself.
+        """
         try:
-            return mlflow.genai.load_prompt(name_or_uri=f"prompts:/{name}@latest")
+            client = mlflow.MlflowClient()
+            versions, token = [], None
+            while True:
+                page = client.search_prompt_versions(name, page_token=token)
+                versions.extend(int(v.version) for v in page)
+                token = getattr(page, "token", None)
+                if not token:
+                    break
         except Exception as exc:
             from mlflow.exceptions import MlflowException
-            # Local tracking servers report RESOURCE_DOES_NOT_EXIST; Unity Catalog may use NOT_FOUND.
             if (isinstance(exc, MlflowException)
                     and exc.error_code in {"RESOURCE_DOES_NOT_EXIST", "NOT_FOUND"}):
                 return None
             self._logger.exception("prompt_latest_lookup_failed", extra={"prompt_name": name})
             raise PromptRegistryError(f"Could not look up the latest version of {name}") from exc
+        return self.load(name, str(max(versions))) if versions else None
 
     def register_if_changed(self, name: str, template: str, change_note: str,
                             tags=None) -> tuple[PromptReference, bool]:
