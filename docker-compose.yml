@@ -1,3 +1,6 @@
+# Local development stack: MLflow OSS + Kong OSS AI gateway (Postgres-backed).
+# Every port binds to 127.0.0.1. Admin API and Kong Manager are unauthenticated:
+# never expose this stack to a network or use real claim data with it.
 services:
   mlflow:
     image: ghcr.io/mlflow/mlflow:v3.18.0
@@ -7,11 +10,96 @@ services:
       --port 5000
       --backend-store-uri sqlite:////mlflow-data/mlflow.db
       --default-artifact-root /mlflow-artifacts
+      --workers 2
     ports:
       - "127.0.0.1:5000:5000"
     volumes:
       - mlflow-data:/mlflow-data
       - mlflow-artifacts:/mlflow-artifacts
+    restart: unless-stopped
+
+  kong-db:
+    image: postgres:16.16
+    environment:
+      POSTGRES_USER: kong
+      POSTGRES_DB: kong
+      POSTGRES_PASSWORD: ${KONG_PG_PASSWORD:-kong-local-dev-only}
+    volumes:
+      - kong-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "kong", "-d", "kong"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # Idempotent: bootstraps an empty database, otherwise applies pending migrations.
+  kong-migrations:
+    image: kong:3.9.3
+    command: sh -c "kong migrations bootstrap && kong migrations up && kong migrations finish"
+    environment: &kong-db-env
+      KONG_DATABASE: postgres
+      KONG_PG_HOST: kong-db
+      KONG_PG_USER: kong
+      KONG_PG_DATABASE: kong
+      KONG_PG_PASSWORD: ${KONG_PG_PASSWORD:-kong-local-dev-only}
+    depends_on:
+      kong-db:
+        condition: service_healthy
+    restart: on-failure
+
+  kong:
+    image: kong:3.9.3
+    environment:
+      <<: *kong-db-env
+      KONG_PROXY_LISTEN: 0.0.0.0:8000
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001
+      KONG_ADMIN_GUI_LISTEN: 0.0.0.0:8002
+      KONG_ADMIN_GUI_URL: http://localhost:8102
+      KONG_ADMIN_GUI_API_URL: http://localhost:8101
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      # Upstream timeouts are per service: see read_timeout in kong/kong.yaml.
+      # Default is one worker per CPU (~70 MB each); Docker Desktop's VM defaults to 2 GB.
+      KONG_NGINX_WORKER_PROCESSES: "2"
+      # pre-function (kong/kong.yaml) runs sandboxed; allow only the JSON codec it needs.
+      KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES: cjson.safe
+    ports:
+      # Host ports 81xx avoid clashes with common local dev servers on 8000-8002.
+      - "127.0.0.1:8100:8000"   # proxy (the AI gateway endpoint)
+      - "127.0.0.1:8101:8001"   # Admin API (edit routes/plugins)
+      - "127.0.0.1:8102:8002"   # Kong Manager OSS UI
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach Ollama on the host (Linux; implicit on Docker Desktop)
+    depends_on:
+      kong-migrations:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+
+  # One-shot seeding of routes/plugins from kong/kong.yaml (Git is the starting point,
+  # Postgres is the live state). Run on demand once Kong is healthy:
+  #   docker compose run --rm kong-seed
+  # `apply` creates/updates the declared entities and never deletes others.
+  # Deliberately no depends_on: `compose run` would re-run kong-migrations and
+  # restart Kong, dropping in-flight model requests.
+  kong-seed:
+    image: kong/deck:v1.68.0
+    profiles: ["seed"]
+    command: gateway apply /kong/kong.yaml --kong-addr http://kong:8001
+    environment:
+      DECK_LIGHTHOUSE_API_KEY: ${KONG_API_KEY:?Set KONG_API_KEY in .env before seeding Kong}
+      DECK_OLLAMA_UPSTREAM: ${OLLAMA_UPSTREAM:-http://host.docker.internal:11434}
+    volumes:
+      - ./kong:/kong:ro
+
 volumes:
   mlflow-data:
   mlflow-artifacts:
+  kong-db-data:

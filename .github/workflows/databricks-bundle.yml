@@ -1,0 +1,124 @@
+# Test on every push/PR; deploy the Databricks bundle (target `ci`) from main or on demand.
+#
+# Repository configuration (Settings -> Environments -> "databricks"):
+#   variables: DATABRICKS_HOST                      (required, e.g. https://dbc-xxxx.cloud.databricks.com)
+#              DATABRICKS_CLIENT_ID                 (service principal application ID)
+#              UNITY_GATEWAY_SMALL_MODEL / _MEDIUM_MODEL / _JUDGE_MODEL   (optional model services)
+#              LIGHTHOUSE_CATALOG                   (optional, default workspace)
+#   secrets:   DATABRICKS_CLIENT_SECRET             (service principal OAuth secret; omit for OIDC)
+#              DATABRICKS_TOKEN                     (only if no service principal is configured)
+# See docs/databricks-setup.md.
+name: databricks-bundle
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_job:
+        description: Run the evaluation job after deploying
+        type: boolean
+        default: true
+      app_model:
+        description: Logical app model (mock needs no model access)
+        default: mock
+      scorer_mode:
+        description: deterministic or llm-judges
+        default: deterministic
+
+permissions:
+  contents: read
+
+concurrency:
+  group: databricks-bundle-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install package and test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Unit tests (offline, no workspace access)
+        run: python -m pytest -q
+
+  deploy:
+    needs: test
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    environment: databricks
+    permissions:
+      contents: read
+      id-token: write   # GitHub OIDC -> Databricks workload identity federation
+    env:
+      DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
+      DATABRICKS_BUNDLE_TARGET: ci
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: databricks/setup-cli@483500c487a296b26b5875a07decbd6e7b1b58c5  # v1.24.0
+
+      - name: Select authentication (service principal preferred, token fallback)
+        # 1. DATABRICKS_CLIENT_ID + secret DATABRICKS_CLIENT_SECRET -> OAuth M2M (Free Edition)
+        # 2. DATABRICKS_CLIENT_ID alone -> GitHub OIDC (needs an account-level federation policy)
+        # 3. secret DATABRICKS_TOKEN -> personal access token
+        env:
+          CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          if [ -z "$DATABRICKS_HOST" ]; then
+            echo "::error::Set the DATABRICKS_HOST variable on the 'databricks' environment"; exit 1
+          fi
+          if [ -n "$CLIENT_ID" ] && [ -n "$CLIENT_SECRET" ]; then
+            echo "::add-mask::$CLIENT_SECRET"
+            {
+              echo "DATABRICKS_AUTH_TYPE=oauth-m2m"
+              echo "DATABRICKS_CLIENT_ID=$CLIENT_ID"
+              echo "DATABRICKS_CLIENT_SECRET=$CLIENT_SECRET"
+            } >> "$GITHUB_ENV"
+            echo "Using service principal OAuth (client secret)"
+          elif [ -n "$CLIENT_ID" ]; then
+            echo "DATABRICKS_AUTH_TYPE=github-oidc" >> "$GITHUB_ENV"
+            echo "DATABRICKS_CLIENT_ID=$CLIENT_ID" >> "$GITHUB_ENV"
+            echo "Using GitHub OIDC workload identity federation"
+          elif [ -n "$TOKEN" ]; then
+            echo "::add-mask::$TOKEN"
+            echo "DATABRICKS_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+            echo "Using DATABRICKS_TOKEN secret"
+          else
+            echo "::error::Configure DATABRICKS_CLIENT_ID (+ DATABRICKS_CLIENT_SECRET for OAuth, or a federation policy for OIDC) or the DATABRICKS_TOKEN secret"; exit 1
+          fi
+
+      - name: Optional bundle variable overrides
+        # Exported only when set, so empty GitHub variables keep the databricks.yml defaults.
+        env:
+          CATALOG: ${{ vars.LIGHTHOUSE_CATALOG }}
+          SMALL: ${{ vars.UNITY_GATEWAY_SMALL_MODEL }}
+          MEDIUM: ${{ vars.UNITY_GATEWAY_MEDIUM_MODEL }}
+          JUDGE: ${{ vars.UNITY_GATEWAY_JUDGE_MODEL }}
+        run: |
+          [ -n "$CATALOG" ] && echo "BUNDLE_VAR_catalog=$CATALOG" >> "$GITHUB_ENV"
+          [ -n "$SMALL" ] && echo "BUNDLE_VAR_small_model_service=$SMALL" >> "$GITHUB_ENV"
+          [ -n "$MEDIUM" ] && echo "BUNDLE_VAR_medium_model_service=$MEDIUM" >> "$GITHUB_ENV"
+          [ -n "$JUDGE" ] && echo "BUNDLE_VAR_judge_model_service=$JUDGE" >> "$GITHUB_ENV"
+          true
+
+      - name: Validate bundle
+        run: databricks bundle validate --strict
+
+      - name: Deploy bundle
+        run: databricks bundle deploy
+
+      - name: Run evaluation job
+        if: github.event_name == 'push' || inputs.run_job
+        env:
+          APP_MODEL: ${{ inputs.app_model || 'mock' }}
+          SCORER_MODE: ${{ inputs.scorer_mode || 'deterministic' }}
+        run: |
+          databricks bundle run lighthouse_prompt_eval \
+            --params "app_model=${APP_MODEL},scorer_mode=${SCORER_MODE}"

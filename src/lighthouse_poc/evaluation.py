@@ -11,7 +11,7 @@ class MLflowEvaluationService:
 
     def run(self,data,predict_fn,scorers,manifest):
         missing=self.MANIFEST_KEYS-set(manifest)
-        if missing: raise ValueError(f"Candidate manifest missing: {sorted(missing)}")
+        if missing: raise EvaluationError(f"Candidate manifest missing: {sorted(missing)}")
         try:
             result=mlflow.genai.evaluate(data=data,predict_fn=predict_fn,scorers=scorers)
             self._logger.info("evaluation_completed",extra={"prompt_name":manifest["prompt_name"],

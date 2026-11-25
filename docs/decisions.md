@@ -1,0 +1,118 @@
+# Architecture decisions
+
+## ADR-001: Environment profiles with one OpenAI-compatible gateway client (2026-11-25)
+
+**Context.** The POC must validate prompt registry and evaluation locally (Ollama models
+behind Kong, the organisation's selected AI gateway) and run unchanged on Databricks
+(workspace MLflow, Unity Gateway, Free Edition model services).
+
+**Decision.**
+- `config/profiles/<env>.yaml` holds everything environment-specific: tracking URI,
+  experiment, prompt namespace, gateway kind/base URL/auth, and a map of **logical model
+  names** (`claims-small`, `claims-medium`, `claims-judge`, `mock`) to gateway routes or
+  model services. Secrets and workspace values come from `${ENV}` references.
+- One `GatewayChatClient` speaks the OpenAI chat-completions API to either gateway.
+  Auth is an injected `AuthProvider` (`api_key_header` for Kong, `databricks_sdk`
+  unified auth for Databricks), evaluated per request so OAuth tokens can refresh.
+- The gateway, not the code, picks the physical model. Kong's `ai-proxy` pins it per route
+  (the client sends an empty `model`); on Databricks the profile names the model service.
+  Runs record the model that actually served each call (`lighthouse.served_models`).
+
+**Consequences.** Swapping a model is a gateway or profile change. Code and tests run
+offline with `mock`. A Databricks profile loads without Unity Gateway variables and fails
+with a `ConfigurationError` naming the missing variable only when a model is used.
+
+## ADR-002: Kong OSS in database mode for local development (2026-11-25)
+
+**Decision.** Run Kong 3.9.3 with Postgres 16 (`docker-compose.yml`), seeded from
+`kong/kong.yaml` with decK `gateway apply`. Postgres holds the live configuration so
+routes and plugins can be edited in Kong Manager or the Admin API and persist.
+Plugins: `key-auth` (service), `ai-proxy` (per route, statistics on, payloads off),
+`correlation-id` and `file-log` (global).
+
+**Consequences.** Git holds the seed, not necessarily the live state; `deck gateway dump`
+captures edits for review. Host ports 8100–8102 avoid clashes with local dev servers.
+Kong runs 2 nginx workers to fit Docker Desktop's default 2 GB VM next to MLflow.
+
+## ADR-003: Judge model separate from the application model family (2026-11-25)
+
+**Decision.** Local judge route `claims-judge` → gemma4-e4b; qwen3.5-9b is the alternate.
+gpt-oss:20b was ruled out as too heavy for the development machine.
+
+**Consequences.** Judge results remain review evidence only; calibrate against SME labels
+(see `docs/metrics.md`, LLM judge agreement) before relying on them.
+
+## ADR-004: LLM judges through the same gateway, credentials off call arguments (2026-11-25)
+
+**Context.** MLflow built-in judges call their model directly using an `openai:/` URI and
+`OPENAI_API_BASE`/`OPENAI_API_KEY`. During `mlflow.genai.evaluate`, MLflow auto-traces
+OpenAI SDK calls and stores call arguments in trace spans. A first implementation passed
+the Kong key per call in `extra_headers` and it was persisted in 14 local trace spans.
+
+**Decision.**
+- `JudgeBinding` (src/lighthouse_poc/scorers.py) resolves the profile's judge alias to a
+  model URI, base URL, credential and inference params. Provider variables are set only for
+  the duration of the evaluation and restored afterwards.
+- Kong judge routes declare `upstream_model` equal to the model Kong pins, so a drift between
+  the profile and the gateway fails loudly (HTTP 400) instead of mislabelling judge lineage.
+- Application gateway credentials live on the SDK client (`default_headers` for Kong,
+  callable `api_key` for bearer/OAuth). Only `X-Correlation-ID` is a per-call header.
+- Ollama's missing JSON mode is handled in Kong (`pre-function`), not in application code.
+- Deterministic gates always run alongside judges; judges never gate alone.
+
+**Remediation performed.** Rotated the local Kong key, deleted the old credential, deleted the
+14 affected traces and vacuumed the local MLflow database; verified the old key is absent
+from MLflow storage and the new key is absent after a full judge run.
+
+**Consequences.** Judge results are comparable between environments (same scorers, profile
+decides the route). Local judge runs are slow (~6 min for 6 cases) because one Ollama host
+alternates between app and judge models.
+
+## ADR-005: Databricks deployment via Asset Bundle and GitHub Actions (2026-11-25)
+
+**Decision.**
+- `databricks.yml` + `resources/lighthouse.yml` deploy a Unity Catalog schema, an MLflow
+  experiment and a two-task serverless job (environment version 5): `register_prompt`
+  (idempotent, `--if-changed`) publishes the version as a task value consumed by `evaluate`.
+- Scripts run from synced workspace files (Git-backed source, no wheel yet); profile inputs are
+  passed as `--env KEY=VALUE` script arguments because job-level environment variables are a
+  Beta feature that requires environment version 5+ and may not be enabled on Free Edition.
+  Only non-secret values are passed this way; model calls use databricks-sdk unified auth.
+- The MLflow registry URI is a profile setting (`databricks-uc` on Databricks).
+- Job parameters default to `app_model=mock, scorer_mode=deterministic` so the first run needs
+  no model access; judges default to the Databricks-managed judge until Unity Gateway is set up.
+- Targets: `dev` (development mode, per-user prefixes) and `ci` (shared root path) for GitHub
+  Actions. CI prefers GitHub OIDC workload identity federation and falls back to a token
+  secret; actions are pinned to commit SHAs.
+
+**Open questions to verify in a real workspace.** Unity Gateway availability on Free Edition and
+whether it exposes chat completions (the quickstart shows the Responses API); service principal
+and federation support on Free Edition; managed-judge availability; schema deletion behaviour
+with prompts.
+
+**Consequences.** Offline checks cover schema validity (CLI JSON schema) and bundle/code
+consistency (tests/test_databricks_bundle.py); `databricks bundle validate` needs a workspace.
+
+**Verified on Free Edition (2026-11-25, CLI 1.24.0, target dev).** Catalog `workspace`; the
+bundle created the schema, experiment and job; serverless environment version 5 installed the
+dependencies; prompts registered in Unity Catalog; the mock/deterministic run passed 6/6 with
+lineage params, linked prompt version and 6 traces. Fixes found by the first deploy:
+- `${workspace.host}` resolves empty when the host comes from a CLI profile; scripts now resolve
+  `DATABRICKS_HOST` from databricks-sdk auth (`runtime.load_runtime_profile`).
+- Serverless runs scripts in an IPython runner where `sys.exit(0)` raises `SystemExit` and fails
+  the task; scripts exit only on failure.
+- Unity Catalog has no implicit `@latest` prompt alias (NOT_FOUND), which was misread as a
+  missing prompt and created identical versions 1–3; `latest()` now uses
+  `search_prompt_versions`. Re-runs report `Unchanged`. The three duplicate versions were
+  reduced to version 3 (identical template, no aliases, the only version linked to runs).
+- Databricks-managed judges (`model_uri: databricks`, `databricks-agents`) work on Free
+  Edition: 6/6 cases judged, no errors; on mock outputs Correctness 5/6 and
+  ExpectationsGuidelines 4/6 with case-specific rationales, Safety 6/6.
+- Unity Gateway is available on Free Edition and serves chat completions; gpt-oss-20b/120b,
+  qwen35-122b-a10b, qwen3-next-80b and llama-4-maverick answer, Gemma/Llama-3 endpoints and
+  frontier models do not. Qwen3.5 returns content as typed parts, so the client keeps only
+  text parts. Bundle defaults: claims-small gpt-oss-20b, claims-medium qwen35-122b-a10b,
+  claims-judge gpt-oss-120b. Real run via the gateway (app + judge): 6/6 on gates and
+  judges, no judge errors, no Authorization/Bearer strings in traces.
+- CI exports `BUNDLE_VAR_*` only when the GitHub variable is set, so empty variables keep the
+  bundle defaults.

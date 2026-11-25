@@ -1,0 +1,107 @@
+# Kong declarative seed for the local Lighthouse AI gateway (decK format).
+# Each logical model name is one route. Applications call
+#   http://localhost:8100/ai/<logical-model>/chat/completions
+# and Kong's ai-proxy chooses the physical model, so swapping a model is a gateway
+# change, not a code change. Secrets come from DECK_* environment variables.
+_format_version: "3.0"
+
+services:
+  - name: ollama-local
+    url: ${{ env "DECK_OLLAMA_UPSTREAM" }}
+    tags: [lighthouse, local]
+    # Kong's per-service default is 60 s, which returns 504 while Ollama swaps models
+    # in and out of memory (observed > 100 s per request during judge runs).
+    connect_timeout: 10000
+    read_timeout: 600000
+    write_timeout: 600000
+    plugins:
+      - name: key-auth
+        config:
+          key_names: [apikey]
+          hide_credentials: true
+      # Provider capability shim: Ollama answers `response_format` (JSON mode) with
+      # HTTP 501, which MLflow judges only retry without JSON mode after HTTP 400.
+      # Dropping the field makes callers rely on prompt instructions + validation.
+      # request-transformer cannot do this: ai-proxy rebuilds the upstream body from
+      # the client request, so the client body itself is edited before ai-proxy runs.
+      - name: pre-function
+        config:
+          access:
+            - |
+              local raw = kong.request.get_raw_body()
+              if raw and raw:find('"response_format"', 1, true) then
+                local cjson = require("cjson.safe")
+                local body = cjson.decode(raw)
+                if type(body) == "table" and body.response_format ~= nil then
+                  body.response_format = nil
+                  ngx.req.set_body_data(cjson.encode(body))
+                  kong.log.debug("removed response_format for ollama upstream")
+                end
+              end
+    routes:
+      - name: claims-small
+        paths: [/ai/claims-small]
+        strip_path: true
+        tags: [lighthouse, app-model]
+        plugins:
+          - name: ai-proxy
+            config:
+              route_type: llm/v1/chat
+              model:
+                provider: openai
+                name: qwen3.5-4b-32k:latest
+                options:
+                  upstream_url: ${{ env "DECK_OLLAMA_UPSTREAM" }}/v1/chat/completions
+              logging:
+                log_statistics: true
+                log_payloads: false
+      - name: claims-medium
+        paths: [/ai/claims-medium]
+        strip_path: true
+        tags: [lighthouse, app-model]
+        plugins:
+          - name: ai-proxy
+            config:
+              route_type: llm/v1/chat
+              model:
+                provider: openai
+                name: qwen3.5-9b-32k:latest
+                options:
+                  upstream_url: ${{ env "DECK_OLLAMA_UPSTREAM" }}/v1/chat/completions
+              logging:
+                log_statistics: true
+                log_payloads: false
+      - name: claims-judge
+        paths: [/ai/claims-judge]
+        strip_path: true
+        tags: [lighthouse, judge-model]
+        plugins:
+          - name: ai-proxy
+            config:
+              route_type: llm/v1/chat
+              model:
+                provider: openai
+                name: gemma4-e4b-32k:latest
+                options:
+                  upstream_url: ${{ env "DECK_OLLAMA_UPSTREAM" }}/v1/chat/completions
+              logging:
+                log_statistics: true
+                log_payloads: false
+
+consumers:
+  - username: lighthouse-local-dev
+    tags: [lighthouse]
+    keyauth_credentials:
+      - key: ${{ env "DECK_LIGHTHOUSE_API_KEY" }}
+
+plugins:
+  - name: correlation-id
+    config:
+      header_name: X-Correlation-ID
+      generator: uuid
+      echo_downstream: true
+  # Token/latency statistics per request, without prompt or response payloads.
+  - name: file-log
+    config:
+      path: /dev/stdout
+      reopen: false

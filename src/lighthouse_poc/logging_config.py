@@ -8,7 +8,10 @@ class JsonFormatter(logging.Formatter):
     """Format standard records and approved diagnostic context as JSON."""
     FIELDS = ("case_id", "trace_id", "run_id", "prompt_name", "prompt_version",
               "model_service", "judge_model", "dataset_version", "application_version",
-              "duration_ms", "error_type", "kpi_name", "kpi_value")
+              "duration_ms", "error_type", "error_category", "kpi_name", "kpi_value",
+              "environment", "gateway", "model_alias", "gateway_route", "served_model",
+              "correlation_id", "prompt_tokens", "completion_tokens",
+              "judge_model_uri", "judge_base_url")
 
     def format(self, record):
         event = {
