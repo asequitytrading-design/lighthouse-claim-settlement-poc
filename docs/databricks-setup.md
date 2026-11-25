@@ -169,20 +169,37 @@ The workflow runs unit tests on every push and pull request. On push to `main`, 
    - `LIGHTHOUSE_CATALOG` (optional, default `workspace`)
    - `UNITY_GATEWAY_SMALL_MODEL`, `UNITY_GATEWAY_MEDIUM_MODEL`, `UNITY_GATEWAY_JUDGE_MODEL` (optional, step 6)
 3. Choose one identity:
-   - **Preferred: GitHub OIDC workload identity federation** (no stored secret). Create a
-     service principal, add a federation policy that trusts GitHub's issuer
-     (`https://token.actions.githubusercontent.com`) for this repository and the `databricks`
-     environment, grant it workspace access plus `USE CATALOG` and `CREATE SCHEMA` on the
-     catalog, then set the environment variable `DATABRICKS_CLIENT_ID` to its application ID.
-     **Verify** that Free Edition allows service principals and federation policies; its
-     limitations page only documents user sign-in methods.
+   - **Free Edition: service principal with an OAuth secret.** Verified 2026-11-25: a workspace
+     admin can create service principals and their secrets, but account APIs (and therefore
+     federation policies) answer `user is unauthenticated`, so OIDC is not available.
+
+     ```bash
+     export DATABRICKS_CONFIG_PROFILE=lighthouse
+     databricks service-principals create --display-name lighthouse-ci -o json   # note id + applicationId
+     databricks service-principals patch <id> --json '{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+       "Operations":[{"op":"add","path":"entitlements","value":[{"value":"workspace-access"}]}]}'
+     databricks grants update catalog workspace --json \
+       '{"changes":[{"principal":"<applicationId>","add":["USE_CATALOG","CREATE_SCHEMA"]}]}'
+     # The secret is shown once; pipe it straight into GitHub so it never reaches the terminal.
+     databricks service-principal-secrets-proxy create <id> --lifetime 7776000s -o json \
+       | python3 -c "import sys,json;print(json.load(sys.stdin)['secret'],end='')" \
+       | gh secret set DATABRICKS_CLIENT_SECRET --env databricks
+     gh variable set DATABRICKS_CLIENT_ID --env databricks --body <applicationId>
+     ```
+
+     Rotate the secret before it expires (90 days above). Deploys and job runs execute as the
+     service principal, so it also needs access to the Unity Gateway model services used.
+   - **Paid workspaces: GitHub OIDC workload identity federation** (no stored secret). An account
+     admin adds a service-principal federation policy that trusts
+     `https://token.actions.githubusercontent.com` for this repository and the `databricks`
+     environment; set only `DATABRICKS_CLIENT_ID`.
    - **Fallback: personal access token.** User settings → Developer → Access tokens → generate
      a token with a short lifetime and store it as the environment **secret** `DATABRICKS_TOKEN`.
      The deployment then runs as you; rotate the token regularly.
 4. Push to `main` (or Actions → databricks-bundle → Run workflow) and follow the run.
 
-The workflow selects OIDC when `DATABRICKS_CLIENT_ID` is set, otherwise the token. Actions are
-pinned to commit SHAs.
+The workflow selects OAuth M2M when `DATABRICKS_CLIENT_ID` and `DATABRICKS_CLIENT_SECRET` are
+set, OIDC when only the client ID is set, otherwise the token. Actions are pinned to commit SHAs.
 
 ## 8. Troubleshooting
 

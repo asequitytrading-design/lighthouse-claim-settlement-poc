@@ -2,10 +2,11 @@
 #
 # Repository configuration (Settings -> Environments -> "databricks"):
 #   variables: DATABRICKS_HOST                      (required, e.g. https://dbc-xxxx.cloud.databricks.com)
-#              DATABRICKS_CLIENT_ID                 (optional: service principal for GitHub OIDC)
+#              DATABRICKS_CLIENT_ID                 (service principal application ID)
 #              UNITY_GATEWAY_SMALL_MODEL / _MEDIUM_MODEL / _JUDGE_MODEL   (optional model services)
 #              LIGHTHOUSE_CATALOG                   (optional, default workspace)
-#   secrets:   DATABRICKS_TOKEN                     (only if OIDC is not configured)
+#   secrets:   DATABRICKS_CLIENT_SECRET             (service principal OAuth secret; omit for OIDC)
+#              DATABRICKS_TOKEN                     (only if no service principal is configured)
 # See docs/databricks-setup.md.
 name: databricks-bundle
 
@@ -61,15 +62,27 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: databricks/setup-cli@483500c487a296b26b5875a07decbd6e7b1b58c5  # v1.24.0
 
-      - name: Select authentication (OIDC preferred, token fallback)
+      - name: Select authentication (service principal preferred, token fallback)
+        # 1. DATABRICKS_CLIENT_ID + secret DATABRICKS_CLIENT_SECRET -> OAuth M2M (Free Edition)
+        # 2. DATABRICKS_CLIENT_ID alone -> GitHub OIDC (needs an account-level federation policy)
+        # 3. secret DATABRICKS_TOKEN -> personal access token
         env:
           CLIENT_ID: ${{ vars.DATABRICKS_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
           TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
           if [ -z "$DATABRICKS_HOST" ]; then
             echo "::error::Set the DATABRICKS_HOST variable on the 'databricks' environment"; exit 1
           fi
-          if [ -n "$CLIENT_ID" ]; then
+          if [ -n "$CLIENT_ID" ] && [ -n "$CLIENT_SECRET" ]; then
+            echo "::add-mask::$CLIENT_SECRET"
+            {
+              echo "DATABRICKS_AUTH_TYPE=oauth-m2m"
+              echo "DATABRICKS_CLIENT_ID=$CLIENT_ID"
+              echo "DATABRICKS_CLIENT_SECRET=$CLIENT_SECRET"
+            } >> "$GITHUB_ENV"
+            echo "Using service principal OAuth (client secret)"
+          elif [ -n "$CLIENT_ID" ]; then
             echo "DATABRICKS_AUTH_TYPE=github-oidc" >> "$GITHUB_ENV"
             echo "DATABRICKS_CLIENT_ID=$CLIENT_ID" >> "$GITHUB_ENV"
             echo "Using GitHub OIDC workload identity federation"
@@ -78,7 +91,7 @@ jobs:
             echo "DATABRICKS_TOKEN=$TOKEN" >> "$GITHUB_ENV"
             echo "Using DATABRICKS_TOKEN secret"
           else
-            echo "::error::Configure DATABRICKS_CLIENT_ID (OIDC) or the DATABRICKS_TOKEN secret"; exit 1
+            echo "::error::Configure DATABRICKS_CLIENT_ID (+ DATABRICKS_CLIENT_SECRET for OAuth, or a federation policy for OIDC) or the DATABRICKS_TOKEN secret"; exit 1
           fi
 
       - name: Optional bundle variable overrides
