@@ -67,6 +67,34 @@ Each run logs its manifest as MLflow params (profile, gateway, model alias, rout
 prompt, dataset, scorer, Git commit) and tags `lighthouse.served_models` with the
 physical models the gateway actually used.
 
+## MLflow artifact storage
+
+The MLflow server proxies artifacts (`--artifacts-destination /mlflow-artifacts`), so
+experiments use `mlflow-artifacts:/<id>` URIs and clients upload through HTTP. An earlier
+setup used `--default-artifact-root /mlflow-artifacts`, which made clients on the host write
+to a path that exists only inside the container: traces still appeared (their spans are in
+the database) but uploads failed with `Read-only file system: '/mlflow-artifacts'` and no
+run artifacts were stored.
+
+If your `mlflow-data` volume predates the change, rewrite the stored paths once (same files,
+new URI scheme; the script keeps a backup next to the database):
+
+```bash
+docker compose stop mlflow
+docker compose run --rm --no-deps -T --entrypoint python mlflow - <<'PY'
+import shutil, sqlite3, time
+db = "/mlflow-data/mlflow.db"
+shutil.copy2(db, f"{db}.bak-{time.strftime('%Y%m%d%H%M%S')}")
+c = sqlite3.connect(db)
+for table, col, where in [("experiments", "artifact_location", ""), ("runs", "artifact_uri", ""),
+                          ("trace_tags", "value", " and key='mlflow.artifactLocation'")]:
+    c.execute(f"update {table} set {col}=replace({col}, '/mlflow-artifacts/', 'mlflow-artifacts:/') "
+              f"where {col} like '/mlflow-artifacts/%'{where}")
+c.commit()
+PY
+docker compose up -d mlflow
+```
+
 ## Managing Kong configuration
 
 `kong/kong.yaml` is the **seed**; Postgres holds the **live** configuration.

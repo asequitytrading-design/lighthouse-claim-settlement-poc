@@ -86,6 +86,16 @@ Verified 2026-11-25: `prompt list` and `show` on Unity Catalog; the same draft
 (`draft-5adc6164`) passed all three gates for CSET-LTD-002 locally on qwen3.5-4b through Kong
 (about 14 s) and on Databricks on qwen35-122b-a10b through Unity Gateway (about 52 s).
 
+## Checking a trial in the MLflow UI
+
+1. **Experiments** → the profile's experiment (local `/lighthouse-claim-settlement-poc`) →
+   **Traces** tab at the experiment level. Trials are not attached to a run, so they do not
+   appear in an evaluation run's Traces tab (which shows only that run's 6 cases).
+2. Filter with a quoted value: `tag.lighthouse.kind = 'try'` (unquoted `=try` matches nothing).
+   Narrow further with `tag.lighthouse.prompt_version = 'draft-236b127c'`.
+3. Open the trace: span tree `try_case` → `predict` with the case input and model output; the
+   `lighthouse.*` tags hold prompt reference, version label, model and profile.
+
 ## Where results live
 
 - **MLflow UI** (local `http://localhost:5000`, or the Databricks workspace): prompt versions
