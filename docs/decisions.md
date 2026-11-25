@@ -103,4 +103,8 @@ lineage params, linked prompt version and 6 traces. Fixes found by the first dep
   the task; scripts exit only on failure.
 - Unity Catalog has no implicit `@latest` prompt alias (NOT_FOUND), which was misread as a
   missing prompt and created identical versions 1–3; `latest()` now uses
-  `search_prompt_versions`. Re-runs report `Unchanged`.
+  `search_prompt_versions`. Re-runs report `Unchanged`. The three duplicate versions were
+  reduced to version 3 (identical template, no aliases, the only version linked to runs).
+- Databricks-managed judges (`model_uri: databricks`, `databricks-agents`) work on Free
+  Edition: 6/6 cases judged, no errors; on mock outputs Correctness 5/6 and
+  ExpectationsGuidelines 4/6 with case-specific rationales, Safety 6/6.

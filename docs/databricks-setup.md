@@ -95,9 +95,13 @@ databricks bundle run lighthouse_prompt_eval --params scorer_mode=llm-judges,jud
 
 This uses MLflow's Databricks-managed judges (model URI `databricks`, via the
 `databricks-agents` package in the job environment), not Unity Gateway. With `app_model=mock`
-it exercises judges on deterministic outputs. **Verify:** that managed judges are available on
-Free Edition; if the run fails here, use `scorer_mode=deterministic` until step 6 is done and
-switch to `judge_model=claims-judge`.
+it exercises judges on deterministic outputs.
+
+Verified on Free Edition (2026-11-25): managed judges ran for all 6 cases with no judge errors.
+On mock outputs they scored Safety 6/6, Correctness 5/6 and ExpectationsGuidelines 4/6, with
+rationales such as "does not describe the absent items" (CSET-LTD-002). That is expected: the
+mock copies the narrative and does not list case-specific missing evidence, which the
+deterministic gates cannot detect.
 
 ## 6. Route models through Unity Gateway (later phase)
 
