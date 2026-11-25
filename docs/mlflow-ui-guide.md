@@ -19,6 +19,61 @@ data only.
 So the UI covers authoring, single-input trials and judging of the traces those trials
 produce. Batch evaluation of a prompt version against the golden set is still code.
 
+## Quick start: seed the demo state
+
+```bash
+python scripts/seed_ui_demo.py            # idempotent; rerun any time before a demo
+python scripts/seed_ui_demo.py --replace-judges   # after editing src/lighthouse_poc/ui_judges.py
+```
+
+It creates only what is missing and prints each change:
+
+| Where in the UI | What the seed provides |
+|---|---|
+| **AI Gateway** (left navigation) | Endpoints `kong-claims-small`, `kong-claims-medium` and `kong-claims-judge` on the Kong routes. The two app endpoints track usage into `/lighthouse-ui-sample`; the judge endpoint keeps its own experiment. |
+| **Prompts** (global: http://localhost:5000/#/prompts) | `claim_intake_triage` v1 and v2 (chat prompts), alias `candidate` → v2, plus the existing `claim_settlement_review`. Both are linked to the experiment, so they also show on its Prompts tab. |
+| Experiment → **Datasets** | `claim_intake_triage_golden` (11 synthetic cases: 5 positive, 6 negative) |
+| Experiment → **Judges** | Code judges (our gates and rubric): `gate_non_decision_boundary`, `gate_required_fields`, `rubric_reply_no_amount`, `rubric_reply_no_decision_language`, `rubric_no_identifier_echo`, `rubric_expected_fields`. LLM judges on `gateway:/kong-claims-judge`: `triage_guidelines`, `triage_case_guidelines`, `triage_safety`. |
+| Experiment → **Evaluation runs** | Created by `lighthouse eval` (see step 6). For example, v2 against v1 with combined scores and verdicts. |
+
+The seed never sets `@champion`: approval is the reviewer's decision (`lighthouse promote`).
+
+Prompts are not owned by experiments. They live in the Prompt Registry (global **Prompts**
+page). An experiment's Prompts tab only lists prompts linked to it through the
+`_mlflow_experiment_ids` prompt tag.
+
+## Demo script: change a prompt and re-evaluate it from the UI
+
+1. **Prompts → claim_intake_triage**: show v1 and v2 and the change notes; compare v1 with v2;
+   point out the alias `candidate`.
+2. **Experiment /lighthouse-ui-sample → Playground**: select endpoint `kong-claims-small`,
+   **Load prompt** → `claim_intake_triage` v2. Paste a golden message (for example TRI-N02,
+   the prompt injection) into the `claimant_message` variable and submit. The answer arrives in
+   about 5–10 s.
+3. Edit the system message (for example, add a rule) and submit again. Repeat for two or three
+   negative cases (TRI-N01, TRI-N04, TRI-N06).
+4. **Save prompt → claim_intake_triage → Save version**. This creates v3 with a change note.
+5. **Traces** tab: each Playground call is a trace (`gateway/kong-claims-small`). Select the new
+   traces → **Run judges** → choose the code judges and `triage_guidelines` / `triage_safety`
+   → run. Each trace now shows a pass/fail or score with a rationale per judge. Verified: code
+   judges read the raw chat completion, and the LLM judges answer through
+   `gateway:/kong-claims-judge` in about 12 s each.
+6. **Batch re-evaluation of v3 on the golden set.** The 3.18 UI cannot run a prompt over a
+   dataset, so use one command:
+   ```bash
+   lighthouse eval --spec claim_intake_triage --prompt 3 --baseline @candidate \
+       --model claims-small --experiment /lighthouse-ui-sample
+   ```
+   Back in **Evaluation runs**, open the new run (per-case `gate_*`, `rubric_*`, `judge_*`,
+   `lighthouse_combined_score`) and compare it with the v2 run.
+7. **Review gate:** `lighthouse promote --prompt 3 --run <run id> --reviewer "..." --rationale "..."`
+   moves `@champion` to v3 only if the run is READY FOR HUMAN REVIEW; the alias and the
+   `lighthouse_approval_*` tags appear on the version.
+
+Judges that need expectations (`rubric_expected_fields`, `triage_case_guidelines`) are only
+meaningful on traces with golden expectations, that is, `lighthouse eval` runs. On Playground
+traces they report "not applicable" or judge without per-case rules.
+
 ## Why no models appeared in the UI
 
 The UI's model pickers list **AI Gateway endpoints** that are registered in MLflow. Our models
@@ -31,6 +86,9 @@ register Kong routes as endpoints (all verified 2026-11-25):
   - `MLFLOW_GATEWAY_API_BASE_ALLOW_PRIVATE_IPS=true` and
     `MLFLOW_GATEWAY_API_BASE_ALLOWED_SCHEMES=http,https` allow endpoints that point to Kong
     on the Docker network (`http://kong:8000`).
+  - `MLFLOW_SERVER_ENABLE_CUSTOM_SCORERS=true` lets the Judges page register and run our custom
+    code judges. The server executes their code, which is acceptable only on this local
+    stack. Python clients that list or load them need the same variable; the seed script sets it.
 - `kong/kong.yaml` (pre-function):
   - Maps `Authorization: Bearer <key>`, the only credential the MLflow gateway sends, to Kong's
     `apikey` header before key-auth checks it. Kong still authenticates every call.
@@ -189,4 +247,6 @@ version and the run, and the full record under the run's **Artifacts → approva
 | Endpoint call returns 400 | Model name differs from the one Kong pins for that route |
 | Empty answer after a long wait | Kong not re-seeded with the `reasoning_effort` default |
 | Saved API keys unreadable after restart | `MLFLOW_CRYPTO_KEK_PASSPHRASE` changed; recreate the API keys |
-| No traces after Playground runs | Usage tracking not enabled on the endpoint, or a different experiment selected |
+| No traces after Playground runs | Usage tracking not enabled on the endpoint, or it tracks into another experiment (rerun the seed) |
+| Experiment says "create your first prompt" | The prompt is not linked to this experiment; it is still on the global Prompts page (rerun the seed) |
+| "Custom scorer registration ... is disabled" | Server or client without `MLFLOW_SERVER_ENABLE_CUSTOM_SCORERS=true` (local only) |

@@ -244,3 +244,18 @@ evaluated a fixed, just-registered version.
 **Consequences.** The first approval on each environment is a manual `promote` (by design). The
 job's runtime roughly doubles once a champion exists and differs from the candidate.
 
+## ADR-011: Seeded UI demo state and UI-runnable code judges (local) (2026-11-26)
+
+**Decision.** `scripts/seed_ui_demo.py` idempotently creates the local UI state: gateway
+endpoints for the Kong routes, with app endpoints tracking into `/lighthouse-ui-sample`;
+`claim_intake_triage` v1 and v2 with `@candidate`; prompt-experiment links; the golden dataset;
+and registered judges. Custom code judges (`src/lighthouse_poc/ui_judges.py`) mirror the
+triage spec's gates and rubric so reviewers can run them on any trace from the Judges page.
+They are self-contained because MLflow stores and re-creates only the function body, and they
+accept dict, JSON-string and chat-completion outputs. LLM judges use `gateway:/kong-claims-judge`.
+
+**Consequences.** `MLFLOW_SERVER_ENABLE_CUSTOM_SCORERS=true` is set on the local server only:
+it executes registered code. The UI judge copies duplicate the spec criteria; tests check that
+they agree on fixtures, and `lighthouse eval` remains the scoring of record. The seed never sets
+`@champion`.
+

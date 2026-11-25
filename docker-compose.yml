@@ -18,6 +18,10 @@ services:
       MLFLOW_CRYPTO_KEK_PASSPHRASE: ${MLFLOW_CRYPTO_KEK_PASSPHRASE:?set MLFLOW_CRYPTO_KEK_PASSPHRASE in .env}
       MLFLOW_GATEWAY_API_BASE_ALLOW_PRIVATE_IPS: "true"
       MLFLOW_GATEWAY_API_BASE_ALLOWED_SCHEMES: "http,https"
+      # Lets the Judges page register and run our custom code judges (gates/rubric). The
+      # server executes registered scorer code: acceptable only because this stack is
+      # local (127.0.0.1) and runs our own synthetic-data scorers. Never on a shared server.
+      MLFLOW_SERVER_ENABLE_CUSTOM_SCORERS: "true"
     ports:
       - "127.0.0.1:5000:5000"
     volumes:

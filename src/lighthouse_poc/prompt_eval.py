@@ -55,6 +55,20 @@ def load_records(spec: EvalSpec, override: str | None = None) -> tuple[list[dict
     return load_golden_records(Path(source)), Path(source).name
 
 
+def upsert_eval_dataset(name: str, experiment_id: str, records: list[dict], tags: dict | None = None):
+    """Create (or reuse) an MLflow evaluation dataset by name and merge records (by inputs)."""
+    try:
+        from mlflow.genai import datasets
+        existing = datasets.search_datasets(experiment_ids=experiment_id,
+                                            filter_string=f"name = '{name}'")
+        dataset = existing[0] if existing else datasets.create_dataset(
+            name=name, experiment_id=experiment_id, tags=tags or {})
+        return dataset.merge_records(records)
+    except Exception as exc:
+        from .exceptions import EvaluationError
+        raise EvaluationError(f"Could not load dataset {name}") from exc
+
+
 def case_id(record: dict, index: int) -> str:
     return str((record.get("tags") or {}).get("case_id")
                or record["inputs"].get("case_id") or f"case-{index + 1:03d}")

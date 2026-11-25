@@ -23,8 +23,9 @@ sys.path.insert(0, str(PROJECT / "src"))
 import mlflow  # noqa: E402
 
 from lighthouse_poc.config import apply_env_overrides, load_dotenv, require  # noqa: E402
-from lighthouse_poc.exceptions import ConfigurationError, EvaluationError, LighthouseError  # noqa: E402
+from lighthouse_poc.exceptions import ConfigurationError, LighthouseError  # noqa: E402
 from lighthouse_poc.logging_config import configure_logging  # noqa: E402
+from lighthouse_poc.prompt_eval import upsert_eval_dataset  # noqa: E402
 from lighthouse_poc.runtime import load_runtime_profile  # noqa: E402
 
 REQUIRED_KEYS = {"inputs", "expectations"}
@@ -69,16 +70,8 @@ def main() -> int:
         mlflow.set_tracking_uri(require(profile.tracking_uri, "mlflow.tracking_uri"))
         experiment = mlflow.set_experiment(args.experiment)
         records = read_records(args.file)
-        try:
-            from mlflow.genai import datasets
-            existing = datasets.search_datasets(experiment_ids=experiment.experiment_id,
-                                                filter_string=f"name = '{args.name}'")
-            dataset = existing[0] if existing else datasets.create_dataset(
-                name=args.name, experiment_id=experiment.experiment_id,
-                tags={"source_file": args.file.name, "synthetic": "true"})
-            dataset = dataset.merge_records(records)
-        except Exception as exc:
-            raise EvaluationError(f"Could not load dataset {args.name}") from exc
+        dataset = upsert_eval_dataset(args.name, experiment.experiment_id, records,
+                                      {"source_file": args.file.name, "synthetic": "true"})
         logger.info("eval_dataset_loaded", extra={"kpi_name": "eval_dataset_records",
                                                   "kpi_value": len(records)})
         print(f"Dataset {args.name} ({dataset.dataset_id}) in experiment {args.experiment}: "
