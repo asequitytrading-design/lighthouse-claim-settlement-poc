@@ -167,6 +167,19 @@ def test_gateway_errors_are_typed_and_categorised():
     assert isinstance(info.value.__cause__, openai.AuthenticationError)
 
 
+def test_gateway_keeps_only_text_parts_of_structured_content():
+    content = [{"type": "reasoning", "summary": [{"type": "summary_text", "text": "thinking"}]},
+               {"type": "text", "text": '{"a": '}, {"type": "text", "text": "1}"}]
+    result = make_client(FakeCompletions(response(content))).complete("s", "u")
+    assert result.text == '{"a": 1}'
+
+
+def test_gateway_reasoning_only_content_is_empty_error():
+    with pytest.raises(ModelInvocationError) as info:
+        make_client(FakeCompletions(response([{"type": "reasoning", "summary": []}]))).complete("s", "u")
+    assert info.value.category == "empty_response"
+
+
 def test_gateway_empty_content_is_an_error():
     with pytest.raises(ModelInvocationError) as info:
         make_client(FakeCompletions(response("  "))).complete("s", "u")

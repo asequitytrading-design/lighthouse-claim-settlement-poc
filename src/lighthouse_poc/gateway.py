@@ -123,6 +123,28 @@ def build_auth(auth: AuthConfig) -> AuthProvider:
     raise ConfigurationError(f"Unsupported auth type {auth.type}")
 
 
+def _content_text(content: Any) -> str:
+    """Normalise message content to text.
+
+    Most models return a string. Reasoning models behind Unity Gateway (e.g. Qwen3.5) return
+    a list of typed parts such as ``{"type": "reasoning", ...}`` and ``{"type": "text",
+    "text": ...}``; only the text parts are the answer.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            kind = part.get("type") if isinstance(part, dict) else getattr(part, "type", None)
+            text = part.get("text") if isinstance(part, dict) else getattr(part, "text", None)
+            if kind in ("text", "output_text") and isinstance(text, str):
+                parts.append(text)
+        return "".join(parts)
+    return str(content)
+
+
 def _categorize(exc: Exception) -> str:
     import openai
     for kind, label in ((openai.AuthenticationError, "auth"),
@@ -193,7 +215,7 @@ class GatewayChatClient:
                 category) from exc
 
         elapsed = round((time.perf_counter() - started) * 1000)
-        text = (result.choices[0].message.content or "") if result.choices else ""
+        text = _content_text(result.choices[0].message.content) if result.choices else ""
         usage = getattr(result, "usage", None)
         completion = Completion(
             text=text, duration_ms=elapsed, served_model=getattr(result, "model", None),

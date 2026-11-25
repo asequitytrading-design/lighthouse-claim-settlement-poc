@@ -103,7 +103,24 @@ rationales such as "does not describe the absent items" (CSET-LTD-002). That is 
 mock copies the narrative and does not list case-specific missing evidence, which the
 deterministic gates cannot detect.
 
-## 6. Route models through Unity Gateway (later phase)
+## 6. Route models through Unity Gateway
+
+**Verified on Free Edition (2026-11-25).** Unity Gateway accepts OpenAI **chat completions** at
+`<host>/ai-gateway/mlflow/v1/chat/completions` (Responses API also works). Of the ready chat
+serving endpoints, these model services answered through the gateway:
+
+| Model service | Gateway | Bundle default |
+|---|---|---|
+| `system.ai.gpt-oss-20b` | yes | `claims-small` |
+| `system.ai.qwen35-122b-a10b` | yes (content arrives as typed parts; the client keeps text parts) | `claims-medium` |
+| `system.ai.gpt-oss-120b` | yes | `claims-judge` |
+| `system.ai.qwen3-next-80b-a3b-instruct`, `system.ai.llama-4-maverick` | yes | — |
+| `system.ai.gemma-3-12b-it`, `system.ai.meta_llama_v3_1_8b_instruct`, `system.ai.llama_v3_3_70b_instruct` | no (404; serving endpoints only) | — |
+
+Frontier models listed under `system.ai` (Claude, GPT-5, Gemini) returned 404 on Free Edition.
+First real-model run: `app_model=claims-medium, scorer_mode=llm-judges, judge_model=claims-judge`
+passed 6/6 on all gates and judges in about 4 minutes, with no judge errors and no credentials in
+traces. The steps below are for checking another workspace or other models.
 
 1. Confirm Unity Gateway is available for the workspace region and edition (the Unity Gateway
    quickstart requires "a workspace in a Unity Gateway supported region"; Free Edition
@@ -122,7 +139,7 @@ deterministic gates cannot detect.
 
    If this returns 404 while `/responses` works, the gateway client needs a Responses API
    adapter (record it in `docs/decisions.md`) before continuing.
-4. Set the model services and deploy:
+4. Set the model services (the bundle defaults above suit Free Edition) and deploy:
 
    ```bash
    databricks bundle deploy \

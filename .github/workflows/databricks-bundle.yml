@@ -57,10 +57,6 @@ jobs:
     env:
       DATABRICKS_HOST: ${{ vars.DATABRICKS_HOST }}
       DATABRICKS_BUNDLE_TARGET: ci
-      BUNDLE_VAR_catalog: ${{ vars.LIGHTHOUSE_CATALOG || 'workspace' }}
-      BUNDLE_VAR_small_model_service: ${{ vars.UNITY_GATEWAY_SMALL_MODEL }}
-      BUNDLE_VAR_medium_model_service: ${{ vars.UNITY_GATEWAY_MEDIUM_MODEL }}
-      BUNDLE_VAR_judge_model_service: ${{ vars.UNITY_GATEWAY_JUDGE_MODEL }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: databricks/setup-cli@483500c487a296b26b5875a07decbd6e7b1b58c5  # v1.24.0
@@ -84,6 +80,20 @@ jobs:
           else
             echo "::error::Configure DATABRICKS_CLIENT_ID (OIDC) or the DATABRICKS_TOKEN secret"; exit 1
           fi
+
+      - name: Optional bundle variable overrides
+        # Exported only when set, so empty GitHub variables keep the databricks.yml defaults.
+        env:
+          CATALOG: ${{ vars.LIGHTHOUSE_CATALOG }}
+          SMALL: ${{ vars.UNITY_GATEWAY_SMALL_MODEL }}
+          MEDIUM: ${{ vars.UNITY_GATEWAY_MEDIUM_MODEL }}
+          JUDGE: ${{ vars.UNITY_GATEWAY_JUDGE_MODEL }}
+        run: |
+          [ -n "$CATALOG" ] && echo "BUNDLE_VAR_catalog=$CATALOG" >> "$GITHUB_ENV"
+          [ -n "$SMALL" ] && echo "BUNDLE_VAR_small_model_service=$SMALL" >> "$GITHUB_ENV"
+          [ -n "$MEDIUM" ] && echo "BUNDLE_VAR_medium_model_service=$MEDIUM" >> "$GITHUB_ENV"
+          [ -n "$JUDGE" ] && echo "BUNDLE_VAR_judge_model_service=$JUDGE" >> "$GITHUB_ENV"
+          true
 
       - name: Validate bundle
         run: databricks bundle validate --strict

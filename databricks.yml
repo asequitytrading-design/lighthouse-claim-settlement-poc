@@ -29,15 +29,17 @@ variables:
   schema:
     description: Schema created by this bundle for prompts (dev mode prefixes it per user).
     default: lighthouse
+  # Defaults: models verified to answer chat completions through Unity Gateway on a Free
+  # Edition workspace (2026-11-25). Override per workspace with --var or BUNDLE_VAR_*.
   small_model_service:
     description: Unity Gateway model service for logical model claims-small (fully qualified, e.g. system.ai.<model>).
-    default: ""
+    default: system.ai.gpt-oss-20b
   medium_model_service:
-    description: Unity Gateway model service for logical model claims-medium.
-    default: ""
+    description: Unity Gateway model service for logical model claims-medium (Qwen 3.5 family, like local).
+    default: system.ai.qwen35-122b-a10b
   judge_model_service:
-    description: Unity Gateway model service for logical judge claims-judge.
-    default: ""
+    description: Unity Gateway model service for logical judge claims-judge (different family from claims-medium).
+    default: system.ai.gpt-oss-120b
 
 targets:
   # Personal development: resources are prefixed "[dev <user>]", schedules paused.

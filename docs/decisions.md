@@ -108,3 +108,11 @@ lineage params, linked prompt version and 6 traces. Fixes found by the first dep
 - Databricks-managed judges (`model_uri: databricks`, `databricks-agents`) work on Free
   Edition: 6/6 cases judged, no errors; on mock outputs Correctness 5/6 and
   ExpectationsGuidelines 4/6 with case-specific rationales, Safety 6/6.
+- Unity Gateway is available on Free Edition and serves chat completions; gpt-oss-20b/120b,
+  qwen35-122b-a10b, qwen3-next-80b and llama-4-maverick answer, Gemma/Llama-3 endpoints and
+  frontier models do not. Qwen3.5 returns content as typed parts, so the client keeps only
+  text parts. Bundle defaults: claims-small gpt-oss-20b, claims-medium qwen35-122b-a10b,
+  claims-judge gpt-oss-120b. Real run via the gateway (app + judge): 6/6 on gates and
+  judges, no judge errors, no Authorization/Bearer strings in traces.
+- CI exports `BUNDLE_VAR_*` only when the GitHub variable is set, so empty variables keep the
+  bundle defaults.
