@@ -1,0 +1,103 @@
+# Workspace resources for the Lighthouse POC. Paths are relative to this file.
+resources:
+  schemas:
+    lighthouse:
+      catalog_name: ${var.catalog}
+      name: ${var.schema}
+      comment: Lighthouse POC prompts (synthetic claim data only).
+
+  experiments:
+    lighthouse_eval:
+      name: /Workspace/Users/${workspace.current_user.userName}/lighthouse-claim-settlement-poc-${bundle.target}
+
+  jobs:
+    lighthouse_prompt_eval:
+      name: lighthouse-prompt-eval-${bundle.target}
+      description: >-
+        Registers the claim-settlement prompt in Unity Catalog (only when the template
+        changed) and evaluates it on the versioned synthetic golden set. Administrative,
+        non-decisional POC; a human examiner makes all settlement decisions.
+      max_concurrent_runs: 1        # Free Edition: max 5 concurrent job tasks per account
+      timeout_seconds: 3600
+      queue:
+        enabled: true
+      tags:
+        project: lighthouse-poc
+        data: synthetic
+
+      # Defaults give a first run that needs no model access (mock app model,
+      # deterministic gates). Override per run, e.g. app_model=claims-medium,
+      # scorer_mode=llm-judges, judge_model=databricks-managed-judge.
+      parameters:
+        - name: app_model
+          default: mock
+        - name: scorer_mode
+          default: deterministic
+        - name: judge_model
+          default: databricks-managed-judge
+        - name: limit
+          default: "0"
+
+      environments:
+        - environment_key: lighthouse
+          spec:
+            environment_version: "5"   # Python 3.12; released 2026-02-25
+            dependencies:
+              - mlflow[databricks]>=3.18,<4
+              - openai>=1.0
+              - pyyaml>=6
+              - databricks-agents>=1.13   # Databricks-managed judges (model URI "databricks")
+
+      tasks:
+        - task_key: register_prompt
+          environment_key: lighthouse
+          spark_python_task:
+            python_file: ../scripts/register_prompt.py
+            parameters:
+              - --profile
+              - databricks
+              - --if-changed
+              - --change-note
+              - "Deployed from ${bundle.name} (${bundle.target}) at ${bundle.git.commit}"
+              - --task-value-key
+              - prompt_version
+              - --env
+              - LIGHTHOUSE_CATALOG=${var.catalog}
+              - --env
+              - LIGHTHOUSE_SCHEMA=${resources.schemas.lighthouse.name}
+
+        - task_key: evaluate
+          depends_on:
+            - task_key: register_prompt
+          environment_key: lighthouse
+          spark_python_task:
+            python_file: ../scripts/evaluate.py
+            parameters:
+              - --profile
+              - databricks
+              - --prompt-version
+              - "{{tasks.register_prompt.values.prompt_version}}"
+              - --model
+              - "{{job.parameters.app_model}}"
+              - --scorer-mode
+              - "{{job.parameters.scorer_mode}}"
+              - --judge-model
+              - "{{job.parameters.judge_model}}"
+              - --limit
+              - "{{job.parameters.limit}}"
+              - --env
+              - LIGHTHOUSE_CATALOG=${var.catalog}
+              - --env
+              - LIGHTHOUSE_SCHEMA=${resources.schemas.lighthouse.name}
+              - --env
+              - LIGHTHOUSE_EXPERIMENT=${resources.experiments.lighthouse_eval.name}
+              - --env
+              - DATABRICKS_HOST=${workspace.host}
+              - --env
+              - GIT_COMMIT=${bundle.git.commit}
+              - --env
+              - UNITY_GATEWAY_SMALL_MODEL=${var.small_model_service}
+              - --env
+              - UNITY_GATEWAY_MEDIUM_MODEL=${var.medium_model_service}
+              - --env
+              - UNITY_GATEWAY_JUDGE_MODEL=${var.judge_model_service}

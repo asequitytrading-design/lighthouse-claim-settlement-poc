@@ -67,3 +67,28 @@ from MLflow storage and the new key is absent after a full judge run.
 **Consequences.** Judge results are comparable between environments (same scorers, profile
 decides the route). Local judge runs are slow (~6 min for 6 cases) because one Ollama host
 alternates between app and judge models.
+
+## ADR-005: Databricks deployment via Asset Bundle and GitHub Actions (2026-11-25)
+
+**Decision.**
+- `databricks.yml` + `resources/lighthouse.yml` deploy a Unity Catalog schema, an MLflow
+  experiment and a two-task serverless job (environment version 5): `register_prompt`
+  (idempotent, `--if-changed`) publishes the version as a task value consumed by `evaluate`.
+- Scripts run from synced workspace files (Git-backed source, no wheel yet); profile inputs are
+  passed as `--env KEY=VALUE` script arguments because job-level environment variables are a
+  Beta feature that requires environment version 5+ and may not be enabled on Free Edition.
+  Only non-secret values are passed this way; model calls use databricks-sdk unified auth.
+- The MLflow registry URI is a profile setting (`databricks-uc` on Databricks).
+- Job parameters default to `app_model=mock, scorer_mode=deterministic` so the first run needs
+  no model access; judges default to the Databricks-managed judge until Unity Gateway is set up.
+- Targets: `dev` (development mode, per-user prefixes) and `ci` (shared root path) for GitHub
+  Actions. CI prefers GitHub OIDC workload identity federation and falls back to a token
+  secret; actions are pinned to commit SHAs.
+
+**Open questions to verify in a real workspace.** Unity Gateway availability on Free Edition and
+whether it exposes chat completions (the quickstart shows the Responses API); service principal
+and federation support on Free Edition; managed-judge availability; schema deletion behaviour
+with prompts.
+
+**Consequences.** Offline checks cover schema validity (CLI JSON schema) and bundle/code
+consistency (tests/test_databricks_bundle.py); `databricks bundle validate` needs a workspace.

@@ -6,6 +6,7 @@ environment: databricks
 
 mlflow:
   tracking_uri: databricks
+  registry_uri: databricks-uc   # prompts live in Unity Catalog (catalog.schema.name)
   experiment: ${LIGHTHOUSE_EXPERIMENT:-/Shared/lighthouse-claim-settlement-poc}
 
 registry:

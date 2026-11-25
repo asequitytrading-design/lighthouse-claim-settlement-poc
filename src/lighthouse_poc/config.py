@@ -132,6 +132,7 @@ class Profile:
     default_judge_model: str
     source: Path
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
+    registry_uri: str | None = None
 
     def model(self, alias: str | None = None) -> ModelRoute:
         alias = alias or self.default_app_model
@@ -198,6 +199,7 @@ def _parse(name: str, data: Mapping, source: Path) -> Profile:
         name=name,
         environment=str(data.get("environment", name)),
         tracking_uri=mlflow_cfg.get("tracking_uri"),
+        registry_uri=mlflow_cfg.get("registry_uri"),
         experiment=mlflow_cfg.get("experiment"),
         prompt_name=registry.get("prompt_name"),
         gateway=GatewayConfig(
@@ -220,6 +222,27 @@ def _parse(name: str, data: Mapping, source: Path) -> Profile:
     if profile.default_judge_model:
         profile.model(profile.default_judge_model)
     return profile
+
+
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def apply_env_overrides(pairs: list[str] | None, env: dict | None = None) -> list[str]:
+    """Apply ``KEY=VALUE`` overrides (e.g. from job parameters) to the environment.
+
+    Serverless job tasks cannot set environment variables portably, so bundles pass
+    profile inputs as ``--env`` arguments. Only non-secret values belong here; secrets
+    come from workspace auth or secret scopes. Returns the names set (never values).
+    """
+    env = os.environ if env is None else env
+    names = []
+    for pair in pairs or []:
+        key, sep, value = pair.partition("=")
+        if not sep or not _ENV_NAME.match(key):
+            raise ConfigurationError(f"--env expects KEY=VALUE, got '{key}'")
+        env[key] = value
+        names.append(key)
+    return names
 
 
 @contextmanager

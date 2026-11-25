@@ -18,15 +18,18 @@ import sys
 from contextlib import ExitStack
 from pathlib import Path
 
-PROJECT = Path(__file__).resolve().parents[1]
+try:
+    PROJECT = Path(__file__).resolve().parents[1]
+except NameError:  # some job runtimes execute scripts without __file__
+    PROJECT = Path(sys.argv[0]).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "src"))
 
 import mlflow  # noqa: E402
 
 from lighthouse_poc import __version__  # noqa: E402
 from lighthouse_poc.agent import ClaimSettlementAssistant  # noqa: E402
-from lighthouse_poc.config import (load_dotenv, load_profile, require,  # noqa: E402
-                                   scoped_environment)
+from lighthouse_poc.config import (apply_env_overrides, load_dotenv,  # noqa: E402
+                                   load_profile, require, scoped_environment)
 from lighthouse_poc.evaluation import MLflowEvaluationService  # noqa: E402
 from lighthouse_poc.exceptions import LighthouseError  # noqa: E402
 from lighthouse_poc.gateway import ServedModelRecorder, build_chat_model  # noqa: E402
@@ -51,6 +54,8 @@ def parse_args():
     parser.add_argument("--application-version", default=__version__)
     parser.add_argument("--dataset-version", default=DATASET_VERSION)
     parser.add_argument("--limit", type=int, help="Evaluate only the first N cases (smoke runs)")
+    parser.add_argument("--env", action="append", metavar="KEY=VALUE",
+                        help="Set a non-secret profile input (repeatable), e.g. from a job")
     return parser.parse_args()
 
 
@@ -65,17 +70,20 @@ def git_commit() -> str:
 def main() -> int:
     args = parse_args()
     logger: logging.Logger = configure_logging()
-    load_dotenv()
+    load_dotenv(PROJECT / ".env")
     try:
+        apply_env_overrides(args.env)
         profile = load_profile(args.profile)
         route = profile.model(args.model)
         mlflow.set_tracking_uri(require(profile.tracking_uri, "mlflow.tracking_uri"))
+        if profile.registry_uri:
+            mlflow.set_registry_uri(profile.registry_uri)
         mlflow.set_experiment(args.experiment or require(profile.experiment, "mlflow.experiment"))
         prompt_name = args.prompt_name or require(profile.prompt_name, "registry.prompt_name")
 
         with (PROJECT / "data" / "golden_eval_dataset.jsonl").open(encoding="utf-8") as stream:
             records = [json.loads(line) for line in stream if line.strip()]
-        records = records[: args.limit] if args.limit else records
+        records = records[: args.limit] if args.limit and args.limit > 0 else records
 
         model = ServedModelRecorder(build_chat_model(profile, route.alias, logger))
         assistant = ClaimSettlementAssistant(MLflowPromptRegistry(logger), model, logger,

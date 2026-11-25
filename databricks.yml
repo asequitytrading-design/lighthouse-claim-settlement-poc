@@ -1,0 +1,51 @@
+# Databricks Asset Bundle: deploys the Lighthouse prompt-registry + evaluation job.
+# Same code and config/profiles/databricks.yaml as local runs; the bundle only supplies
+# workspace-specific, non-secret inputs. See docs/databricks-setup.md.
+#
+#   databricks bundle validate            # target dev (default)
+#   databricks bundle deploy
+#   databricks bundle run lighthouse_prompt_eval
+#   databricks bundle run lighthouse_prompt_eval --params app_model=claims-medium,scorer_mode=llm-judges
+bundle:
+  name: lighthouse-claim-settlement-poc
+  databricks_cli_version: ">= 1.24.0"
+
+include:
+  - resources/*.yml
+
+sync:
+  # .gitignore is honoured (.env, .venv, MLflow state are never uploaded).
+  exclude:
+    - app/**
+    - kong/**
+    - docker-compose.yml
+    - tests/**
+    - .github/**
+
+variables:
+  catalog:
+    description: Unity Catalog catalog for the schema that holds prompts (Free Edition usually `workspace`).
+    default: workspace
+  schema:
+    description: Schema created by this bundle for prompts (dev mode prefixes it per user).
+    default: lighthouse
+  small_model_service:
+    description: Unity Gateway model service for logical model claims-small (fully qualified, e.g. system.ai.<model>).
+    default: ""
+  medium_model_service:
+    description: Unity Gateway model service for logical model claims-medium.
+    default: ""
+  judge_model_service:
+    description: Unity Gateway model service for logical judge claims-judge.
+    default: ""
+
+targets:
+  # Personal development: resources are prefixed "[dev <user>]", schedules paused.
+  dev:
+    mode: development
+    default: true
+
+  # Shared deployment used by GitHub Actions (service principal or token identity).
+  ci:
+    workspace:
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}

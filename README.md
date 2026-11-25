@@ -26,6 +26,10 @@ python -m pytest
 
 Environment differences live in `config/profiles/{local,databricks}.yaml`; code uses logical model names (`claims-small`, `claims-medium`, `claims-judge`, `mock`) and the gateway picks the physical model. See [docs/local-development.md](docs/local-development.md) and [docs/decisions.md](docs/decisions.md). The mock validates plumbing only, not model quality. Never expose the local stack or place real claim data in it.
 
+## Databricks deployment
+
+`databricks bundle deploy && databricks bundle run lighthouse_prompt_eval` deploys a Unity Catalog schema, an MLflow experiment and a serverless job (register prompt if changed → evaluate). GitHub Actions tests every push and deploys `main`. Step-by-step setup, including the manual workspace, identity and Unity Gateway steps: [docs/databricks-setup.md](docs/databricks-setup.md).
+
 ## Databricks model calls
 
 Use `--profile databricks`. Authentication uses databricks-sdk unified auth (runtime identity, OAuth or token); set `UNITY_GATEWAY_{SMALL,MEDIUM,JUDGE}_MODEL` to permitted fully qualified model services. The starter's Unity Gateway adapter uses the workspace route `/ai-gateway/mlflow/v1`; actual service names and permissions depend on the workspace. Never commit a real token. For local tests without Databricks connectivity, use `scripts/evaluate.py --model mock`; the mock is deterministic wiring help, not evidence of model quality. A local MLflow container does not emulate Unity Gateway.
@@ -47,5 +51,7 @@ Business logic lives under `src/lighthouse_poc`. The notebook is an optional int
 - `config/profiles/`: environment profiles (local, databricks).
 - `kong/kong.yaml`: Kong routes/plugins seed.
 - `tests/`: offline unit tests.
+- `databricks.yml`, `resources/`: Databricks Asset Bundle (schema, experiment, job).
+- `.github/workflows/`: test, validate, deploy and smoke-run pipeline.
 
 Databricks Free Edition is personal, non-commercial, serverless-only and quota-limited. Use synthetic data only and an organization-approved workspace for client-facing or commercial demonstrations. See [Free Edition limitations](https://docs.databricks.com/aws/en/getting-started/free-edition-limitations).

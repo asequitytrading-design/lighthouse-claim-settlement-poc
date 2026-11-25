@@ -27,6 +27,9 @@ Targets are provisional and need claims-examiner/product-owner review. LLM score
 | Judge invocation errors | Judge assessments with an error instead of a value | percent | MLflow assessment `error` fields | 0% | Engineer |
 | Judge latency | Wall time per judge assessment | seconds | Evaluation run duration / Kong `file-log` for `claims-judge` | Baseline first (local gemma4: 2–17 s, longer during model swaps) | Engineer |
 | Secrets in traces | Evaluation runs whose stored traces contain a gateway credential | count | Post-run scan of the MLflow store for the active key | 0 (verified after judge run, 2026-11-25) | Platform owner |
+| Bundle deployment success | Successful `bundle deploy` runs divided by attempts (CI target) | percent | GitHub Actions `deploy` job | 100% on main | Platform owner |
+| Databricks smoke run success | Post-deploy job runs where both tasks succeed | percent | `databricks bundle run` exit status / job run history | 100% on main | Engineer |
+| Prompt version churn | New prompt versions created per deploy when the template is unchanged | count | `register_prompt` task output (`Registered` vs `Unchanged`) | 0 | Engineer |
 | Local stack memory headroom | Peak container memory as share of the Docker VM limit | percent | `docker stats` during an evaluation | < 80% (raise Docker memory if exceeded) | Engineer |
 
 For each module, feature or bug fix, record KPI change, baseline, target and measurement source in its PR/commit notes. Avoid logging raw narratives, diagnoses, death details, personal identifiers or secrets.
