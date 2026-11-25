@@ -12,6 +12,7 @@ Synthetic cases cover short-term disability, long-term disability, life, acciden
 
 - Follow OOP and SOLID: focused classes, clear interfaces, dependency injection, and provider adapters.
 - Keep reusable business logic in `src/lighthouse_poc`; notebooks are optional thin exploration/demo entry points. Prefer a package and Python script/wheel job path as the POC evolves toward an MVP.
+- Environment differences live only in `config/profiles/*.yaml` (see `docs/decisions.md` ADR-001). Code refers to logical model names; Kong (local, OSS + Postgres) and Unity Gateway (Databricks) are reached through the single OpenAI-compatible `GatewayChatClient`. Kong is the organisation's selected AI gateway; Unity Gateway is the Databricks POC route.
 - Unity Gateway is the selected Databricks model routing and governance layer. Use qualified model-service names and workspace OAuth/secret-managed credentials. Keep local model calls behind an injectable adapter; use a mock when Databricks access is unavailable.
 - Structured logging and typed exception handling are mandatory. Preserve causal chains; do not swallow errors or fabricate success.
 - Log synthetic case ID, trace/run ID, prompt/model/dataset/app versions, latency and error category where available. Avoid full claim narratives, health details and secrets in logs.

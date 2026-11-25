@@ -8,24 +8,26 @@ import json, logging, os, sys
 from pathlib import Path
 from mlflow.genai.scorers import Correctness, ExpectationsGuidelines, Safety
 
-PROJECT=Path.cwd()
+PROJECT=Path.cwd().parent  # notebooks run with cwd = the notebook folder
 sys.path.insert(0,str(PROJECT/"src"))
 import mlflow
-from lighthouse_poc.agent import UnityGatewayChatClient,ClaimSettlementAssistant
+from lighthouse_poc.agent import ClaimSettlementAssistant
+from lighthouse_poc.config import load_profile
+from lighthouse_poc.gateway import build_chat_model
 from lighthouse_poc.evaluation import MLflowEvaluationService
 from lighthouse_poc.prompt_registry import MLflowPromptRegistry
 from lighthouse_poc.logging_config import configure_logging
 
 logger=configure_logging()
 dbutils.widgets.text("prompt_name","main.default.claim_settlement_review")
-dbutils.widgets.text("model_service","system.ai.<approved-model-service>")
+dbutils.widgets.text("model_alias","claims-medium")
 dbutils.widgets.text("experiment_name","/Shared/lighthouse-claim-settlement-poc")
 dbutils.widgets.text("application_version","0.1.0")
 dbutils.widgets.text("prompt_version","1")
 dbutils.widgets.text("register_new_prompt","false")
 name=dbutils.widgets.get("prompt_name").strip()
-model_service=dbutils.widgets.get("model_service").strip()
-if not model_service or "<" in model_service: raise ValueError("Set model_service to an approved Unity Gateway service.")
+profile=load_profile("databricks")
+model_service=dbutils.widgets.get("model_alias").strip()
 mlflow.set_experiment(dbutils.widgets.get("experiment_name").strip())
 registry=MLflowPromptRegistry(logger)
 
@@ -44,7 +46,7 @@ print({"prompt_name":name,"prompt_version":prompt_version})
 # COMMAND ----------
 with (PROJECT/"data"/"golden_eval_dataset.jsonl").open(encoding="utf-8") as f:
     records=[json.loads(line) for line in f if line.strip()]
-model=UnityGatewayChatClient(model_service,logger)
+model=build_chat_model(profile,model_service,logger)
 assistant=ClaimSettlementAssistant(registry,model,logger,name,prompt_version,
                       dbutils.widgets.get("application_version"))
 def predict_fn(case_id:str,product_segment:str,claim_narrative:str,

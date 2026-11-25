@@ -1,0 +1,42 @@
+# Local profile: MLflow OSS (Docker) + Kong OSS AI gateway -> Ollama models.
+# Start with `docker compose up -d` and seed Kong (see docs/local-development.md).
+# ${VAR} / ${VAR:-default} values are resolved from the environment (.env is loaded).
+environment: local
+
+mlflow:
+  tracking_uri: ${MLFLOW_TRACKING_URI:-http://localhost:5000}
+  experiment: /lighthouse-claim-settlement-poc
+
+registry:
+  prompt_name: claim_settlement_review
+
+gateway:
+  kind: kong
+  # Each logical model is a Kong route: <base_url>/<route>/chat/completions
+  base_url: ${KONG_PROXY_URL:-http://localhost:8100/ai}
+  auth:
+    type: api_key_header
+    header: apikey
+    env: KONG_API_KEY
+  timeout_seconds: 600
+  max_retries: 1
+
+# Logical model names are stable across environments; the gateway decides the
+# physical model. Kong ai-proxy pins the model per route, so `upstream_model` is
+# left empty and the response reports the model that actually served the call.
+models:
+  claims-small:
+    route: claims-small
+    params: {temperature: 0, reasoning_effort: none}
+  claims-medium:
+    route: claims-medium
+    params: {temperature: 0, reasoning_effort: none}
+  claims-judge:
+    route: claims-judge
+    params: {temperature: 0, reasoning_effort: none}
+  mock:
+    kind: mock
+
+defaults:
+  app_model: claims-medium
+  judge_model: claims-judge

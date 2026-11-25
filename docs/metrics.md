@@ -18,5 +18,11 @@ Targets are provisional and need claims-examiner/product-owner review. LLM score
 | LLM judge agreement | Agreement between judge result and SME review on sampled cases | percent / Cohen's kappa | Judge feedback compared with reviewer labels | Baseline first; calibrate before promotion | Claims SME |
 | Judge rationale coverage | Evaluation outputs with judge value and rationale | percent | MLflow scorer feedback on traces | 100% for completed judge runs | Engineer |
 | Judge route lineage | Runs recording judge model/route, scorer version, and dataset version | percent | Evaluation run manifest | 100% | Platform owner |
+| Gateway request failure by category | Failed gateway calls grouped by `error_category` (auth, permission, not_found, rate_limit, timeout, connection, bad_request, upstream, empty_response, configuration) divided by attempts | percent per category | `GatewayChatClient` log `model_request_failed` (`kpi_name=gateway_request_failed`) | 0% auth/config; others baseline first | Platform owner |
+| Served-model lineage | Evaluation runs tagged with the physical model(s) the gateway actually used (`lighthouse.served_models`) | percent | Evaluation script run tags | 100% | Engineer |
+| Gateway token usage | Prompt and completion tokens per request and per evaluation run | tokens | Client log (`prompt_tokens`, `completion_tokens`); Kong `file-log` `ai.proxy.usage`; Unity Gateway usage on Databricks | Baseline first | Platform owner |
+| Gateway/trace correlation | Gateway log entries whose `X-Correlation-ID` matches an MLflow trace ID | percent | Kong `correlation_id` vs MLflow trace IDs | 100% for traced calls | Engineer |
+| Profile configuration errors | Runs that stop with `ConfigurationError` (missing variable, unknown model/profile) | count | Script exit logs (`error_category=configuration`) | 0 in CI and scheduled jobs | Engineer |
+| Local stack memory headroom | Peak container memory as share of the Docker VM limit | percent | `docker stats` during an evaluation | < 80% (raise Docker memory if exceeded) | Engineer |
 
 For each module, feature or bug fix, record KPI change, baseline, target and measurement source in its PR/commit notes. Avoid logging raw narratives, diagnoses, death details, personal identifiers or secrets.

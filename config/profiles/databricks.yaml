@@ -1,0 +1,41 @@
+# Databricks profile: workspace MLflow + Unity Gateway.
+# Values marked VERIFY depend on the workspace (Free Edition catalogs, available
+# model services); override them with environment variables / job parameters
+# instead of editing code. See docs/local-development.md and the Databricks guide.
+environment: databricks
+
+mlflow:
+  tracking_uri: databricks
+  experiment: ${LIGHTHOUSE_EXPERIMENT:-/Shared/lighthouse-claim-settlement-poc}
+
+registry:
+  # VERIFY: Free Edition workspaces normally expose the `workspace` catalog.
+  prompt_name: ${LIGHTHOUSE_CATALOG:-workspace}.${LIGHTHOUSE_SCHEMA:-lighthouse}.claim_settlement_review
+
+gateway:
+  kind: unity_gateway
+  base_url: ${DATABRICKS_HOST}/ai-gateway/mlflow/v1
+  auth:
+    # Uses databricks-sdk unified auth: notebook/job identity, OAuth or a PAT.
+    type: databricks_sdk
+  timeout_seconds: 300
+  max_retries: 2
+
+# Same logical names as the local profile. upstream_model is the qualified
+# Unity Gateway model service. VERIFY which services the workspace offers.
+models:
+  claims-small:
+    upstream_model: ${UNITY_GATEWAY_SMALL_MODEL}
+    params: {temperature: 0}
+  claims-medium:
+    upstream_model: ${UNITY_GATEWAY_MEDIUM_MODEL}
+    params: {temperature: 0}
+  claims-judge:
+    upstream_model: ${UNITY_GATEWAY_JUDGE_MODEL}
+    params: {temperature: 0}
+  mock:
+    kind: mock
+
+defaults:
+  app_model: claims-medium
+  judge_model: claims-judge
