@@ -150,6 +150,22 @@ def test_latest_follows_pagination(prompt_api):
     assert api.searched == [None, "t2"]
 
 
+def test_versions_newest_first_and_empty_when_missing(prompt_api):
+    prompt_api(FakePromptApi(templates={2: "b", 10: "c", 1: "a"}))
+    assert [v.version for v in MLflowPromptRegistry(LOGGER).versions("c.s.p")] == ["10", "2", "1"]
+    prompt_api(FakePromptApi(templates={}))
+    assert MLflowPromptRegistry(LOGGER).versions("c.s.p") == []
+
+
+def test_load_alias_errors_are_typed(monkeypatch):
+    def missing(name_or_uri):
+        assert name_or_uri == "prompts:/c.s.p@champion"
+        raise RuntimeError("NOT_FOUND")
+    monkeypatch.setattr("mlflow.genai.load_prompt", missing)
+    with pytest.raises(PromptRegistryError, match="@champion"):
+        MLflowPromptRegistry(LOGGER).load_alias("c.s.p", "champion")
+
+
 def test_registry_lookup_errors_are_not_treated_as_missing(prompt_api):
     from mlflow.exceptions import MlflowException
     from mlflow.protos.databricks_pb2 import PERMISSION_DENIED

@@ -35,11 +35,15 @@ class ClaimSettlementAssistant:
                    "inconsistencies", "recommended_examiner_actions", "risk_flags")
 
     def __init__(self, registry, model: ChatModel, logger: logging.Logger,
-                 prompt_name: str, prompt_version: str, app_version: str):
+                 prompt_name: str, prompt_version: str, app_version: str, prompt=None):
+        """``prompt`` is an already resolved prompt (e.g. a draft file or an alias target).
+
+        When given, ``prompt_version`` should be its label so logs name the exact text.
+        """
         self._registry, self._model, self._logger = registry, model, logger
         self._prompt_name, self._prompt_version, self._app_version = (
             prompt_name, prompt_version, app_version)
-        self._prompt = None
+        self._prompt = prompt
 
     def _system_prompt(self) -> str:
         if self._prompt is None:  # versions are immutable, so one load per assistant

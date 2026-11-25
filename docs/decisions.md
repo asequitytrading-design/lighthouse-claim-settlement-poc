@@ -81,9 +81,11 @@ alternates between app and judge models.
 - The MLflow registry URI is a profile setting (`databricks-uc` on Databricks).
 - Job parameters default to `app_model=mock, scorer_mode=deterministic` so the first run needs
   no model access; judges default to the Databricks-managed judge until Unity Gateway is set up.
-- Targets: `dev` (development mode, per-user prefixes) and `ci` (shared root path) for GitHub
-  Actions. CI prefers GitHub OIDC workload identity federation and falls back to a token
-  secret; actions are pinned to commit SHAs.
+- Targets: `dev` (development mode, per-user prefixes) and `ci` (the deploying identity's home
+  folder; `/Workspace/Shared` fails `validate --strict` because every user can write there) for
+  GitHub Actions. CI authenticates as service principal `lighthouse-ci` with OAuth M2M on Free
+  Edition (no account admin, so no OIDC federation policy), uses GitHub OIDC when only the client
+  ID is set, and falls back to a token secret; actions are pinned to commit SHAs.
 
 **Open questions to verify in a real workspace.** Unity Gateway availability on Free Edition and
 whether it exposes chat completions (the quickstart shows the Responses API); service principal
@@ -116,3 +118,33 @@ lineage params, linked prompt version and 6 traces. Fixes found by the first dep
   judges, no judge errors, no Authorization/Bearer strings in traces.
 - CI exports `BUNDLE_VAR_*` only when the GitHub variable is set, so empty variables keep the
   bundle defaults.
+- First CI deploy from `main` (2026-11-25): authenticated as `lighthouse-ci`, deployed target
+  `ci`, registered `workspace.lighthouse.claim_settlement_review` version 1 and ran the mock
+  evaluation (`TERMINATED SUCCESS`).
+
+## ADR-006: Developer CLI with prompt references and content-addressed drafts (2026-11-25)
+
+**Context.** The job runs a fixed prompt version and model. Developers need to inspect
+versions, edit a prompt, try it on a case and compare it, locally and on Databricks, without
+creating a registry version for every edit.
+
+**Decision.**
+- A `lighthouse` console script (`src/lighthouse_poc/cli.py`) is the developer entry point;
+  scripts stay as job entry points. Commands share the profile, registry and assistant code
+  with the job.
+- One prompt reference syntax everywhere: `<version>`, `@<alias>`, `latest`, `file:<path>`
+  (`src/lighthouse_poc/prompts.py`). Ambiguous input (e.g. `v3`, bare `champion`) is rejected.
+- Drafts are unregistered and labelled `draft-<sha256[:8]>` of their text; the label is the
+  prompt version in logs and trace tags. Only registered versions can be approved.
+- `try` runs one golden case as its own trace (`lighthouse.kind=try`) and applies the
+  deterministic gates; it is a smoke test, not review evidence.
+- Interactive output is concise; `-v` adds the structured JSON logs. Errors are typed and
+  exit with code 2; gate failures exit with 1.
+- Planned: `eval` with `--baseline` (step 2), then `promote` that records the approval on the
+  prompt version and run before moving `@champion`, with the assistant and job loading
+  `@champion` (step 3).
+
+**Consequences.** Unity Catalog returns protobuf timestamps for prompt versions where the MLflow
+server returns epoch milliseconds; the CLI handles both. Reading another identity's schema
+(e.g. the CI schema) needs an explicit grant.
+

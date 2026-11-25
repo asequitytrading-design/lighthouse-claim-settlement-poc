@@ -31,5 +31,9 @@ Targets are provisional and need claims-examiner/product-owner review. LLM score
 | Databricks smoke run success | Post-deploy job runs where both tasks succeed | percent | `databricks bundle run` exit status / job run history | 100% on main | Engineer |
 | Prompt version churn | New prompt versions created per deploy when the template is unchanged | count | `register_prompt` task output (`Registered` vs `Unchanged`) | 0 | Engineer |
 | Local stack memory headroom | Peak container memory as share of the Docker VM limit | percent | `docker stats` during an evaluation | < 80% (raise Docker memory if exceeded) | Engineer |
+| Draft trial gate pass rate | `lighthouse try` runs where all deterministic gates pass, per draft label | percent | `prompt_try_completed` log (`kpi_name=try_checks_passed`) and `lighthouse.kind=try` traces | Track per draft; 100% before running the golden evaluation | Engineer |
+| Trial latency | Wall time of one `lighthouse try` case | milliseconds | `prompt_try_completed` log `duration_ms` | Baseline: ~14 s local qwen3.5-4b, ~52 s Unity Gateway qwen35-122b (2026-11-25) | Engineer |
+| Registry versions per accepted change | Registered prompt versions created per change that reaches review (drafts iterate unregistered) | count | Prompt registry history vs PRs touching `prompts/` | 1 | Engineer |
+| CLI configuration errors | `lighthouse` invocations ending with exit code 2, by error type | count | stderr / `-v` structured logs | Trending to 0 per developer onboarding | Engineer |
 
 For each module, feature or bug fix, record KPI change, baseline, target and measurement source in its PR/commit notes. Avoid logging raw narratives, diagnoses, death details, personal identifiers or secrets.

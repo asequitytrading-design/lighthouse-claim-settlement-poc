@@ -1,7 +1,24 @@
-"""MLflow GenAI evaluation service."""
+"""MLflow GenAI evaluation service and the golden dataset loader."""
+import json
 import logging
+from pathlib import Path
+
 import mlflow
-from .exceptions import EvaluationError
+
+from .config import PROJECT_ROOT
+from .exceptions import ConfigurationError, EvaluationError
+
+GOLDEN_DATASET = PROJECT_ROOT / "data" / "golden_eval_dataset.jsonl"
+
+
+def load_golden_records(path: Path | None = None) -> list[dict]:
+    """Golden records ({inputs, expectations}) from JSONL, in file order."""
+    path = Path(path) if path else GOLDEN_DATASET
+    try:
+        with path.open(encoding="utf-8") as stream:
+            return [json.loads(line) for line in stream if line.strip()]
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigurationError(f"Cannot read golden dataset {path}") from exc
 
 class MLflowEvaluationService:
     MANIFEST_KEYS={"application_version","prompt_name","prompt_version","model_service",

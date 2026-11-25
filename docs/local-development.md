@@ -60,6 +60,9 @@ python -m pytest                                                                
 A 6-case run takes about 6 minutes on this machine. A case that fails (gateway error or
 contract violation) is recorded as a failed case instead of aborting the run.
 
+To edit a prompt and try it on single cases before a full evaluation, use the `lighthouse`
+CLI: [developer-workflow.md](developer-workflow.md).
+
 Each run logs its manifest as MLflow params (profile, gateway, model alias, route,
 prompt, dataset, scorer, Git commit) and tags `lighthouse.served_models` with the
 physical models the gateway actually used.

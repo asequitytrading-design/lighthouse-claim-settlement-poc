@@ -26,6 +26,10 @@ python -m pytest
 
 Environment differences live in `config/profiles/{local,databricks}.yaml`; code uses logical model names (`claims-small`, `claims-medium`, `claims-judge`, `mock`) and the gateway picks the physical model. See [docs/local-development.md](docs/local-development.md) and [docs/decisions.md](docs/decisions.md). The mock validates plumbing only, not model quality. Never expose the local stack or place real claim data in it.
 
+## Developer workflow
+
+`lighthouse prompt list | show | diff` and `lighthouse try` let developers inspect versions, edit a draft prompt and try it on a golden case with any profile model, locally or on Databricks, without registering a version per edit: [docs/developer-workflow.md](docs/developer-workflow.md).
+
 ## Databricks deployment
 
 `databricks bundle deploy && databricks bundle run lighthouse_prompt_eval` deploys a Unity Catalog schema, an MLflow experiment and a serverless job (register prompt if changed → evaluate). GitHub Actions tests every push and deploys `main`. Step-by-step setup, including the manual workspace, identity and Unity Gateway steps: [docs/databricks-setup.md](docs/databricks-setup.md).

@@ -1,0 +1,347 @@
+"""lighthouse: developer CLI for prompt versions and quick single-case trials.
+
+The same commands work locally (Ollama via Kong, local MLflow) and against Databricks
+(Unity Gateway, Unity Catalog prompts) by switching --profile. Prompt references:
+  3 | @champion | latest | file:prompts/draft.txt
+
+  lighthouse prompt list
+  lighthouse prompt show @champion
+  lighthouse prompt show 3 --template-only > prompts/draft.txt     # start a draft
+  lighthouse prompt diff 3 file:prompts/draft.txt
+  lighthouse cases
+  lighthouse try --prompt file:prompts/draft.txt --case CSET-LTD-002 --model claims-small
+  lighthouse --profile databricks try --prompt latest --case CSET-STD-001 --model claims-medium
+"""
+from __future__ import annotations
+
+import argparse
+import difflib
+import json
+import logging
+import os
+import re
+import sys
+
+os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")  # keep CLI output readable
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Callable, TextIO
+
+from . import __version__
+from .config import Profile, apply_env_overrides, load_dotenv, require
+from .exceptions import LighthouseError
+from .prompts import REF_HELP, PromptResolver, ResolvedPrompt
+
+_SENTENCE = re.compile(r"(?<=[.!?])\s+")
+
+
+# ---------------------------------------------------------------- context
+@dataclass
+class Context:
+    """Everything a command needs; built once by bootstrap, injectable in tests."""
+    profile: Profile
+    logger: logging.Logger
+    registry: object
+    prompt_name: str
+    out: TextIO
+
+    @property
+    def resolver(self) -> PromptResolver:
+        return PromptResolver(self.registry, self.prompt_name)
+
+
+def bootstrap(args, out: TextIO) -> Context:
+    import mlflow
+
+    from .logging_config import configure_logging
+    from .prompt_registry import MLflowPromptRegistry
+    from .runtime import load_runtime_profile
+
+    # Interactive use: errors are summarised on stderr by main(); -v adds the structured
+    # JSON logs (with tracebacks) that scripts and jobs always emit.
+    logger = configure_logging(logging.INFO if args.verbose else logging.CRITICAL)
+    load_dotenv(Path.cwd() / ".env")
+    load_dotenv()  # project .env for editable installs
+    apply_env_overrides(args.env)
+    profile = load_runtime_profile(args.profile, logger)
+    mlflow.set_tracking_uri(require(profile.tracking_uri, "mlflow.tracking_uri"))
+    if profile.registry_uri:
+        mlflow.set_registry_uri(profile.registry_uri)
+    prompt_name = args.prompt_name or require(profile.prompt_name, "registry.prompt_name")
+    return Context(profile, logger, MLflowPromptRegistry(logger), prompt_name, out)
+
+
+# ---------------------------------------------------------------- prompt commands
+def _when(timestamp) -> str:
+    """Epoch milliseconds (MLflow server) or a protobuf Timestamp (Unity Catalog)."""
+    if timestamp is None or timestamp == 0:
+        return "-"
+    if hasattr(timestamp, "seconds"):  # google.protobuf Timestamp
+        seconds = timestamp.seconds + getattr(timestamp, "nanos", 0) / 1e9
+    else:
+        seconds = int(timestamp) / 1000
+    if not seconds:
+        return "-"
+    return datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+
+def cmd_prompt_list(ctx: Context, args) -> int:
+    versions = ctx.registry.versions(ctx.prompt_name)
+    if not versions:
+        print(f"No registered versions of {ctx.prompt_name}. Register one with "
+              "scripts/register_prompt.py or iterate on a draft with file:<path>.", file=ctx.out)
+        return 0
+    print(f"{ctx.prompt_name}  ({len(versions)} versions, profile {ctx.profile.name})", file=ctx.out)
+    print(f"{'VERSION':<8} {'CREATED (UTC)':<17} {'ALIASES':<20} CHANGE NOTE", file=ctx.out)
+    for index, version in enumerate(versions[: args.limit] if args.limit else versions):
+        aliases = list(getattr(version, "aliases", None) or [])
+        if index == 0:
+            aliases.append("(latest)")
+        print(f"{version.version!s:<8} {_when(getattr(version, 'creation_timestamp', None)):<17} "
+              f"{' '.join(aliases) or '-':<20} {getattr(version, 'commit_message', None) or '-'}",
+              file=ctx.out)
+    return 0
+
+
+def _describe(prompt: ResolvedPrompt) -> list[str]:
+    lines = [f"name:        {prompt.name}",
+             f"reference:   {prompt.reference}",
+             f"version:     {prompt.label}" + ("  (unregistered draft)" if prompt.is_draft else "")]
+    if prompt.is_draft:
+        lines.append(f"path:        {prompt.path}")
+    else:
+        lines += [f"aliases:     {' '.join(prompt.aliases) or '-'}",
+                  f"created:     {_when(prompt.creation_timestamp)}",
+                  f"change note: {prompt.commit_message or '-'}"]
+    variables = sorted(re.findall(r"\{\{\s*(\w+)\s*\}\}", prompt.template))
+    lines.append(f"size:        {len(prompt.template)} chars; variables: {', '.join(variables) or 'none'}")
+    return lines
+
+
+def cmd_prompt_show(ctx: Context, args) -> int:
+    prompt = ctx.resolver.resolve(args.ref)
+    if args.template_only:
+        ctx.out.write(prompt.template)
+        return 0
+    print("\n".join(_describe(prompt)), file=ctx.out)
+    print("-" * 72, file=ctx.out)
+    print(prompt.template.rstrip("\n"), file=ctx.out)
+    return 0
+
+
+def split_units(template: str, unit: str) -> list[str]:
+    """Lines, or sentences within lines (prompts are often one long paragraph)."""
+    lines = template.splitlines()
+    if unit == "line":
+        return lines
+    return [sentence for line in lines for sentence in (_SENTENCE.split(line) if line else [""])]
+
+
+def prompt_diff(old: ResolvedPrompt, new: ResolvedPrompt, unit: str = "sentence") -> list[str]:
+    return list(difflib.unified_diff(
+        split_units(old.template, unit), split_units(new.template, unit),
+        fromfile=f"{old.name} {old.label} ({old.reference})",
+        tofile=f"{new.name} {new.label} ({new.reference})", lineterm="", n=1))
+
+
+def cmd_prompt_diff(ctx: Context, args) -> int:
+    old, new = ctx.resolver.resolve(args.old), ctx.resolver.resolve(args.new)
+    lines = prompt_diff(old, new, args.by)
+    if not lines:
+        print(f"No differences between {old.reference} ({old.label}) and "
+              f"{new.reference} ({new.label}).", file=ctx.out)
+        return 0
+    print("\n".join(lines), file=ctx.out)
+    return 0
+
+
+# ---------------------------------------------------------------- cases and try
+def cmd_cases(ctx: Context, args) -> int:
+    from .evaluation import load_golden_records
+    for record in load_golden_records(args.dataset):
+        inputs = record["inputs"]
+        print(f"{inputs['case_id']:<16} {inputs['product_segment']:<24} "
+              f"{len(inputs.get('submitted_documents', []))} documents", file=ctx.out)
+    return 0
+
+
+def find_case(records: list[dict], case_id: str) -> dict:
+    for record in records:
+        if record["inputs"]["case_id"] == case_id:
+            return record
+    from .exceptions import ConfigurationError
+    known = ", ".join(r["inputs"]["case_id"] for r in records)
+    raise ConfigurationError(f"Unknown case {case_id!r}; available: {known}")
+
+
+def run_checks(output, expectations) -> dict[str, bool]:
+    """The deterministic release gates, applied to one output."""
+    from .scorers import expected_fields_match, non_decision_boundary, output_schema_valid
+    return {"output_schema_valid": bool(output_schema_valid(outputs=output)),
+            "non_decision_boundary": bool(non_decision_boundary(outputs=output)),
+            "expected_fields_match": bool(expected_fields_match(outputs=output,
+                                                               expectations=expectations))}
+
+
+def try_case(ctx: Context, prompt: ResolvedPrompt, record: dict, model_alias: str | None,
+             model_factory: Callable | None = None) -> dict:
+    """Run one golden case through the assistant; return output, checks and lineage.
+
+    Traced as its own MLflow trace (tag lighthouse.kind=try) so the developer can open it.
+    """
+    import mlflow
+
+    from .agent import ClaimSettlementAssistant
+    from .gateway import ServedModelRecorder, build_chat_model
+    from .scorers import ERROR_KEY
+
+    route = ctx.profile.model(model_alias)
+    model = ServedModelRecorder((model_factory or build_chat_model)(ctx.profile, route.alias,
+                                                                    ctx.logger))
+    assistant = ClaimSettlementAssistant(ctx.registry, model, ctx.logger, prompt.name,
+                                         prompt.label, __version__, prompt=prompt)
+    inputs = record["inputs"]
+    trace_ids: list[str] = []
+
+    @mlflow.trace(name="try_case")
+    def run(**case_inputs):
+        trace_id = mlflow.get_active_trace_id()
+        if trace_id:
+            trace_ids.append(trace_id)
+            mlflow.update_current_trace(tags={
+                "lighthouse.kind": "try", "lighthouse.prompt_reference": prompt.reference,
+                "lighthouse.prompt_version": prompt.label, "lighthouse.model": route.alias,
+                "lighthouse.profile": ctx.profile.name})
+        try:
+            return assistant.predict(**case_inputs)
+        except LighthouseError as exc:
+            return {ERROR_KEY: type(exc).__name__,
+                    "error_category": getattr(exc, "category", "output_validation"),
+                    "claim_id": case_inputs["case_id"]}
+
+    started = datetime.now(timezone.utc)
+    output = run(**inputs)
+    elapsed_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+    checks = run_checks(output, record.get("expectations"))
+    ctx.logger.info("prompt_try_completed", extra={
+        "case_id": inputs["case_id"], "prompt_name": prompt.name, "prompt_version": prompt.label,
+        "model_alias": route.alias, "duration_ms": elapsed_ms,
+        "trace_id": trace_ids[0] if trace_ids else None,
+        "kpi_name": "try_checks_passed", "kpi_value": int(all(checks.values()))})
+    return {"case_id": inputs["case_id"], "prompt_reference": prompt.reference,
+            "prompt_version": prompt.label, "model": route.alias,
+            "served_models": sorted(model.served_models), "duration_ms": elapsed_ms,
+            "trace_id": trace_ids[0] if trace_ids else None,
+            "checks": checks, "passed": all(checks.values()), "output": output}
+
+
+def cmd_try(ctx: Context, args) -> int:
+    import mlflow
+
+    from .evaluation import load_golden_records
+    from .scorers import ERROR_KEY
+
+    prompt = ctx.resolver.resolve(args.prompt)
+    record = find_case(load_golden_records(args.dataset), args.case)
+    mlflow.set_experiment(args.experiment or require(ctx.profile.experiment, "mlflow.experiment"))
+    result = try_case(ctx, prompt, record, args.model)
+    if args.json:
+        print(json.dumps(result, indent=2, default=str), file=ctx.out)
+        return 0 if result["passed"] else 1
+    output = result["output"]
+    print(f"case {result['case_id']} | prompt {result['prompt_reference']} -> "
+          f"{result['prompt_version']} | model {result['model']} "
+          f"({', '.join(result['served_models']) or 'n/a'}) | {result['duration_ms']} ms",
+          file=ctx.out)
+    print("-" * 72, file=ctx.out)
+    if isinstance(output, dict) and ERROR_KEY in output:
+        print(f"Model call or output contract failed: {output[ERROR_KEY]} "
+              f"({output.get('error_category')}). Re-run with --verbose for details.",
+              file=ctx.out)
+    else:
+        print(json.dumps(output, indent=2, ensure_ascii=False), file=ctx.out)
+    print("-" * 72, file=ctx.out)
+    for name, ok in result["checks"].items():
+        print(f"{'PASS' if ok else 'FAIL'}  {name}", file=ctx.out)
+    if result["trace_id"]:
+        print(f"trace: {result['trace_id']} (MLflow experiment "
+              f"{args.experiment or ctx.profile.experiment})", file=ctx.out)
+    print("One case is a smoke test, not evidence; run the golden evaluation before review.",
+          file=ctx.out)
+    return 0 if result["passed"] else 1
+
+
+# ---------------------------------------------------------------- parser and entry point
+def _common(parser: argparse.ArgumentParser, suppress: bool) -> None:
+    default = argparse.SUPPRESS if suppress else None
+    parser.add_argument("--profile", default=default,
+                        help="Profile name or YAML path (default: $LIGHTHOUSE_PROFILE or local)")
+    parser.add_argument("--prompt-name", default=default, help="Override the profile's prompt name")
+    parser.add_argument("--env", action="append", metavar="KEY=VALUE", default=default,
+                        help="Set a non-secret profile input (repeatable)")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        default=argparse.SUPPRESS if suppress else False,
+                        help="Show structured INFO logs on stderr")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="lighthouse", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--version", action="version", version=f"lighthouse {__version__}")
+    _common(parser, suppress=False)
+    commands = parser.add_subparsers(dest="command", required=True, metavar="command")
+
+    prompt = commands.add_parser("prompt", help="Inspect registered prompt versions and drafts")
+    prompt_commands = prompt.add_subparsers(dest="prompt_command", required=True, metavar="action")
+    listing = prompt_commands.add_parser("list", help="Versions, aliases and change notes")
+    listing.add_argument("--limit", type=int, default=0, help="Show only the newest N versions")
+    listing.set_defaults(handler=cmd_prompt_list)
+    show = prompt_commands.add_parser("show", help="Metadata and template for one reference")
+    show.add_argument("ref", help=REF_HELP)
+    show.add_argument("--template-only", action="store_true",
+                      help="Print only the template (e.g. to start a draft file)")
+    show.set_defaults(handler=cmd_prompt_show)
+    diff = prompt_commands.add_parser("diff", help="Diff two references (versions, aliases, drafts)")
+    diff.add_argument("old", help=REF_HELP)
+    diff.add_argument("new", help=REF_HELP)
+    diff.add_argument("--by", choices=("sentence", "line"), default="sentence",
+                      help="Compare by sentence (default; prompts are often one paragraph) or line")
+    diff.set_defaults(handler=cmd_prompt_diff)
+    for sub in (listing, show, diff):
+        _common(sub, suppress=True)
+
+    cases = commands.add_parser("cases", help="List golden case IDs for try")
+    cases.add_argument("--dataset", help="Golden JSONL (default: data/golden_eval_dataset.jsonl)")
+    cases.set_defaults(handler=cmd_cases)
+
+    trial = commands.add_parser("try", help="Run one golden case with a prompt and model")
+    trial.add_argument("--prompt", required=True, help=REF_HELP)
+    trial.add_argument("--case", required=True, help="Golden case ID (see: lighthouse cases)")
+    trial.add_argument("--model", help="Logical app model from the profile (default: profile app_model)")
+    trial.add_argument("--dataset", help="Golden JSONL (default: data/golden_eval_dataset.jsonl)")
+    trial.add_argument("--experiment", help="Override the profile's MLflow experiment for the trace")
+    trial.add_argument("--json", action="store_true", help="Machine-readable result")
+    trial.set_defaults(handler=cmd_try)
+    for sub in (cases, trial):
+        _common(sub, suppress=True)
+    return parser
+
+
+def main(argv: list[str] | None = None, out: TextIO | None = None,
+         context_factory: Callable | None = None) -> int:
+    out = out or sys.stdout
+    args = build_parser().parse_args(argv)
+    try:
+        ctx = (context_factory or bootstrap)(args, out)
+        return args.handler(ctx, args)
+    except LighthouseError as exc:
+        cause = f" (cause: {type(exc.__cause__).__name__}: {exc.__cause__})" if exc.__cause__ else ""
+        print(f"error: {exc}{cause}", file=sys.stderr)
+        if not getattr(args, "verbose", False):
+            print("(re-run with -v for structured logs)", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
