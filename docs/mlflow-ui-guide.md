@@ -250,3 +250,5 @@ version and the run, and the full record under the run's **Artifacts → approva
 | No traces after Playground runs | Usage tracking not enabled on the endpoint, or it tracks into another experiment (rerun the seed) |
 | Experiment says "create your first prompt" | The prompt is not linked to this experiment; it is still on the global Prompts page (rerun the seed) |
 | "Custom scorer registration ... is disabled" | Server or client without `MLFLOW_SERVER_ENABLE_CUSTOM_SCORERS=true` (local only) |
+| Endpoint call (often Detect issues) returns 400 "request body doesn't contain valid prompts" | Request body over Kong's 8 KB in-memory buffer; ai-proxy cannot read it. `KONG_NGINX_PROXY_CLIENT_BODY_BUFFER_SIZE=10m` in `docker-compose.yml`; `docker compose up -d kong` |
+| Detect issues: "Failed to parse response from judge model" | Judge model too small for the strict output format. In the model picker expand **AI Gateway** (bottom of the list; the dialog preselects the first endpoint) and choose `kong-claims-judge` or `kong-claims-medium`, not `kong-claims-small` |

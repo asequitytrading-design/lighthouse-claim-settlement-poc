@@ -65,6 +65,21 @@ gemma4-e4b-32k (judge).
 ## Progress log
 
 ### 2026-11-26
+- Ollama service: `OLLAMA_KEEP_ALIVE=30m` (all models stay loaded until 30 min after their
+  queue drains). Set in `~/Library/LaunchAgents/sh.brew.ollama.plist`; `brew services restart`
+  or `brew upgrade ollama` regenerates that file and drops it, so re-add it afterwards and reload with
+  `launchctl bootout gui/$(id -u)/sh.brew.ollama; launchctl bootstrap gui/$(id -u) <plist>`.
+  On this 16 GB Mac gemma4 (~8.7 GiB) and a qwen model do not fit together: Ollama evicts
+  one to load the other regardless of keep-alive.
+- UI: user-created prompt `meeting-summariser` in experiment 10, evaluated with six registered
+  LLM judges `summary_*` on `kong-claims-judge` (one criterion each; a combined six-criterion
+  judge failed to parse on every trace). Its traces are local-only by the user's decision:
+  never copy them to Databricks or git.
+- Fixed: MLflow UI "Detect issues" failed through Kong with 400 "request body doesn't contain
+  valid prompts". Kong's 8 KB proxy body buffer spilled the ~20 KB judge request to disk, so
+  ai-proxy (and the pre-function shims) saw no body; `KONG_NGINX_PROXY_CLIENT_BODY_BUFFER_SIZE=10m`.
+  Verified verification passes on `kong-claims-medium` and `kong-claims-judge`; `kong-claims-small`
+  (4b) cannot meet the discovery judge's output format.
 - Seeded the local MLflow UI (`scripts/seed_ui_demo.py`, ADR-011): gateway endpoints, triage
   prompts v1/v2, dataset, 6 code judges (`ui_judges.py`) and 3 LLM judges on
   `gateway:/kong-claims-judge`; verified the UI loop (Playground-style call → trace → judges).
