@@ -22,6 +22,12 @@ services:
       # server executes registered scorer code: acceptable only because this stack is
       # local (127.0.0.1) and runs our own synthetic-data scorers. Never on a shared server.
       MLFLOW_SERVER_ENABLE_CUSTOM_SCORERS: "true"
+      # UI "Run judges" jobs run in this server. Defaults (10 items x 10 scorers in
+      # parallel) queue every LLM judge on the single local Ollama model, and calls
+      # past the 300 s scorer timeout fail. One call at a time matches what a local
+      # Ollama model can serve; raise these for a hosted judge model.
+      MLFLOW_GENAI_EVAL_MAX_WORKERS: "1"
+      MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS: "1"
     ports:
       - "127.0.0.1:5000:5000"
     volumes:
