@@ -2,6 +2,8 @@
 
 A Python-first starter for prompt versioning and evaluation for a synthetic life and health claim settlement preparation assistant. It spans short-term disability, long-term disability, life, accident, critical illness, and dental claims. The assistant organizes evidence for a human examiner; it does not determine coverage, eligibility, diagnosis, or benefit amounts.
 
+Progress, environment state and open actions: [docs/ledger.md](docs/ledger.md).
+
 ## Two ways to demonstrate
 
 - **Local development:** run the open-source MLflow server with Docker Compose and use its actual MLflow UI at `http://localhost:5000`. This supports local prompt/evaluation development with a SQL-backed tracking store. Unity Catalog integrations and Unity Gateway are Databricks workspace capabilities, not part of the local container.
