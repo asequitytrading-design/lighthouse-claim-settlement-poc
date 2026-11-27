@@ -1,0 +1,11 @@
+# Runtime dependencies of the Databricks App (apps/lighthouse_demo); local development uses
+# `pip install -e '.[platform,app]'` from pyproject.toml.
+mlflow[databricks]>=3.18,<4
+openai>=1.0
+databricks-sdk>=0.38
+pyyaml>=6
+alembic>=1.13,<2
+databricks-sqlalchemy>=2.0.8,<3
+fastapi>=0.110
+uvicorn>=0.29
+httpx>=0.27

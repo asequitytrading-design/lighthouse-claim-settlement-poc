@@ -196,3 +196,15 @@ def test_guidance_search_with_grounding_returns_only_answered_and_cited_passages
     no = GuidanceSearchTool(_vs([0.60]), _Embedder(), answerer=_Answerer(False)).run({"query": "pet insurance"})
     assert no.status == "empty" and no.content == {"result": NO_GUIDANCE}
     assert "do not contain" in no.data["refusal_reason"]
+
+
+def test_app_grants_are_least_privilege_and_reject_odd_principals():
+    from lighthouse_poc.platform.app_grants import grant_statements
+    from lighthouse_poc.exceptions import ConfigurationError
+    sql = grant_statements(NAMES, "1234-abcd", "dev_alex_lighthouse")
+    assert sql[0] == "GRANT USE CATALOG ON CATALOG workspace TO `1234-abcd`"
+    assert "GRANT USE SCHEMA, SELECT, EXECUTE ON SCHEMA workspace.dev_alex_ai_claims TO `1234-abcd`" in sql
+    assert "GRANT USE SCHEMA, SELECT, MODIFY ON SCHEMA workspace.dev_alex_ai_observability TO `1234-abcd`" in sql
+    assert sql[-1].startswith("GRANT USE SCHEMA, EXECUTE ON SCHEMA workspace.dev_alex_lighthouse")
+    with pytest.raises(ConfigurationError):
+        grant_statements(NAMES, "x`; DROP TABLE y")

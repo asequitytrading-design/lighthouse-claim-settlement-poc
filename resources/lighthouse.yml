@@ -15,6 +15,34 @@ resources:
     lighthouse_eval_uc:
       name: /Workspace/Users/${workspace.current_user.userName}/lighthouse-claim-settlement-poc-uc-${bundle.target}
 
+  # Demo app (docs/demo-thin-ui.md): lighthouse-api + the built UI, run as the app's service
+  # principal. Free Edition: start it for testing and the demo, stop it otherwise
+  # (databricks apps stop <name>). Grants: lighthouse platform app grants --principal <app SP id>.
+  apps:
+    lighthouse_demo:
+      name: lighthouse-demo-${bundle.target}
+      description: Lighthouse claims copilot demo (synthetic data)
+      source_code_path: ..
+      config:
+        command: ["python", "apps/lighthouse_demo/serve.py"]
+        env:
+          - {name: LIGHTHOUSE_PROFILE, value: databricks}
+          - {name: LIGHTHOUSE_CATALOG, value: "${var.catalog}"}
+          - {name: LIGHTHOUSE_SCHEMA, value: "${resources.schemas.lighthouse.name}"}
+          - {name: LIGHTHOUSE_PLATFORM_PREFIX, value: "${var.platform_prefix}"}
+          - {name: LIGHTHOUSE_ENVIRONMENT, value: "${bundle.target}"}
+          - {name: LIGHTHOUSE_APP_USE_CASE, value: claims_copilot}
+          - {name: LIGHTHOUSE_SESSION_STORE, value: sqlite}
+          - {name: LIGHTHOUSE_SQLITE_PATH, value: /tmp/lighthouse/sessions.db}
+          - {name: LIGHTHOUSE_GENIE_SPACE_ID, value: "${var.genie_space_id}"}
+          - {name: DATABRICKS_WAREHOUSE_ID, value_from: sql-warehouse}
+          - {name: MLFLOW_DISABLE_AGENT_HINT, value: "1"}
+      resources:
+        - name: sql-warehouse
+          sql_warehouse: {id: "${var.warehouse_id}", permission: CAN_USE}
+        - name: genie-space
+          genie_space: {name: lighthouse-claims, space_id: "${var.genie_space_id}", permission: CAN_RUN}
+
   jobs:
     lighthouse_prompt_eval:
       name: lighthouse-prompt-eval-${bundle.target}

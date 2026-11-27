@@ -15,7 +15,11 @@ include:
 
 sync:
   # .gitignore is honoured (.env, .venv, MLflow state are never uploaded).
+  include:
+    - apps/lighthouse_demo/web/dist/**          # built UI (gitignored, served by the app)
   exclude:
+    - apps/lighthouse_demo/web/node_modules/**
+    - apps/lighthouse_demo/web/src/**
     - app/**
     - kong/**
     - docker-compose.yml
@@ -25,6 +29,12 @@ sync:
     - scripts/meeting_summariser_iterate.py      # local-only experiment (never on Databricks)
 
 variables:
+  genie_space_id:
+    description: Genie space of the claims copilot (lighthouse platform genie ensure prints it).
+    default: ""
+  warehouse_id:
+    description: SQL warehouse the demo app queries (usage, evals, Genie).
+    default: ""
   catalog:
     description: Unity Catalog catalog for the schema that holds prompts (Free Edition usually `workspace`).
     default: workspace
