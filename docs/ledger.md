@@ -3,13 +3,42 @@
 Running record of progress, environment state and open actions. Update it at the end of each
 session; newest entries first. Synthetic data only.
 
-## Resume here (last updated 2026-11-27, end of day)
+## Resume here (last updated 2026-11-27, late evening)
 
-**State:** `main` at `25a2285` (PR #5 demo, squash) after PR #4 (public release: MIT license,
-CODEOWNERS, setup guide). All feature branches merged and deleted. This ledger update is on local
-branch `chore/ledger-handoff` (not pushed). The repository is **public**; ruleset "Protect main"
+**State:** `main` at `310ace2` (PR #6: deployment runbook, notebook 00, ledger handoff; squash)
+after PR #5 (demo) and PR #4 (public release). All feature branches merged and deleted. The repository is **public**; ruleset "Protect main"
 needs a code-owner approval, so merges use the admin bypass only with the user's explicit OK.
 CI: tests on every push/PR; Databricks deploys are manual. 328 tests offline.
+
+**Client workspace deployment — planned, not started.** The demo goes onto the client's
+Databricks workspace, deployed by us with a **developer account** from the client's **Windows 11
+virtual desktop** (Databricks CLI available there). Plan and commands: `docs/deployment-runbook.md`.
+- **Route A (preferred):** CLI from the virtual desktop: install Python 3.12 + Databricks CLI,
+  unzip, `pip install -e ".[platform,app]"`, `databricks auth login`, `lighthouse platform verify`
+  / `models sync` / `genie ensure`, create Lakebase `lighthouse-demo` + `CREATE EXTENSION vector`,
+  write `variable-overrides.json`, `bundle deploy -t dev`, `platform app grants`, `bundle run
+  lighthouse_prompt_eval`, `bundle run lighthouse_demo`.
+- **Route B (fallback, UI only):** zip into a UC Volume, unzip with a notebook snippet into the
+  user folder, run `notebooks/00_workspace_setup` steps 0-2, deploy from the workspace bundle panel
+  (or web terminal), notebook 00 step 3 for grants, job "Run now", notebook 06 to start.
+- **Hand-over package:** `~/Downloads/lighthouse-claim-settlement-poc.zip` (local only, not in git;
+  205 files, built from `main` at `310ace2` plus the built UI `apps/lighthouse_demo/web/dist`, so
+  Node is not needed on the desktop). Left out: `.git`, `.github`, `.gitignore`, `CLAUDE.md`,
+  `CLAUDE_HANDOFF.md`, `docs/ledger.md`, `LICENSE` (user's decision; README License section
+  removed), meeting-summariser scripts/tests/metric rows. README clone step replaced by "unzip".
+  Scanned clean for company/client names, personal names, e-mails, workspace hosts and IDs
+  (screenshots checked too). Rebuild it the same way after any code change (tests on the copy:
+  291 pass; `bundle validate` works without git).
+- **Ask the client admin before the session:** the prerequisites and permissions tables of the
+  runbook (UC `USE CATALOG` + `CREATE SCHEMA`, `CAN_USE` on a SQL warehouse, create Apps /
+  Lakebase / Vector Search endpoint / Genie space, `CAN_QUERY` on the `system.ai` models, managed
+  MCP preview on, OAuth or PAT for the CLI) and outbound HTTPS from the desktop (workspace host,
+  `*.databricksapps.com`, Entra ID login, PyPI or mirror, CLI download).
+- **Unknowns to settle on the day:** which `system.ai` models the workspace serves (change only
+  `config/model_catalog.yaml` + `model_pricing.yaml` + bundle model variables); Lakebase flavour
+  (`demo_env.py` controls autoscaling projects only; provisioned instances via the UI; no Lakebase
+  → `session_store=sqlite` and drop the app's `lakebase` resource); Vector Search endpoint quota;
+  whether the workspace bundle Deploy panel exists. Notebook 00 has not run on a workspace yet.
 
 **Demo for the engagement lead: Monday 2026-11-30 — ready.** User validates and runs it through
 on 2026-11-28.
@@ -26,6 +55,8 @@ on 2026-11-28.
   the SQL warehouse list if the file is lost.
 
 **Open user actions:**
+0. Client deployment: send the runbook prerequisites/permissions to the client admin; copy the zip
+   to the virtual desktop; schedule the deployment session (A15-A17).
 1. Validation run-through (2026-11-28); report anything to fix.
 2. Optional before Monday: approve a prompt version (notebook 05 step 9) so the handoff uses the
    governed `@champion` template (otherwise it says it was written without the approved template).
@@ -63,6 +94,9 @@ export DATABRICKS_CONFIG_PROFILE=lighthouse                    # Databricks CLI 
 | A12 | Clean-up (ask first): local prompts `gapcheck_claim_settlement_review`, `local.claim_settlement_review`; local experiments `/gapcheck-eval`, `/lighthouse-error-path-check`, `/Shared/lighthouse-claim-settlement-poc`, `gateway/zz-check`, `gateway/zz-check-claims-small` (created by Claude's tests), `gateway/kong-claims-small`/`-medium` (unused since the seed), test runs in `/lighthouse-eval-dev`; the `lighthouse-account` profile in `~/.databrickscfg` (no account access) | Claude, when asked | The two `zz-check` experiments are Claude's own leftovers |
 | A13 | Optional: rotate `KONG_API_KEY`; Claude's output once showed its first 6 hex characters | User | Local-only key |
 | A14 | Optional: raise Docker Desktop memory to 4 GB (2 GB caused an MLflow OOM earlier) | User | |
+| A15 | Client workspace: confirm prerequisites and developer permissions with the client admin (runbook sections 1-3) | User | Before the deployment session; missing features are SKIPPED, not fatal, except Apps, UC, a SQL warehouse and one chat model |
+| A16 | Client workspace: deploy per `docs/deployment-runbook.md` (route A, route B as fallback) and fill in the "Check the deployment" table | User + Claude | Record the deployment-time and success KPIs (`docs/metrics.md`) and any runbook fix |
+| A17 | First real run of `notebooks/00_workspace_setup` (route B) | User + Claude | Untested on a workspace; fix and re-zip if a step fails |
 
 ## Environment state (2026-11-26)
 
@@ -87,6 +121,14 @@ gemma4-e4b-32k (judge).
   `DATABRICKS_CLIENT_SECRET` (expires 2027-02-23).
 
 ## Progress log
+
+### 2026-11-27 (client deployment preparation; PR #6)
+- Scan for company/client names, the user's e-mail and personal names: only "Arjun" in two docs
+  (replaced by role, merged) and the user's name in `LICENSE` (repo unchanged; left out of the zip).
+- `docs/deployment-runbook.md` (Windows virtual desktop CLI route + UI-only route, permissions,
+  connectivity, checks, troubleshooting), `notebooks/00_workspace_setup.py`, bundle sync excludes
+  local state without `.gitignore`, deployment KPIs. Hand-over zip built in Downloads.
+- Free Edition demo app shown live once and stopped again (app + Lakebase down).
 
 ### 2026-11-27 (demo phase 7: rehearsal)
 - Dry run on Apps found hallucinations (handoff from memory; Genie follow-up invented case IDs;
