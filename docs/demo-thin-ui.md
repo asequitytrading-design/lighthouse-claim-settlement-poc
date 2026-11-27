@@ -10,7 +10,7 @@ and evaluation results, behind a thin UI, on dummy data.
 | # | Decision | Notes |
 |---|---|---|
 | D1 | Demo Monday, scope tiers below | Must / Should / Later |
-| D2 | **Our own agent** is primary; **Agent Bricks** side by side if it works on Free Edition | build-vs-buy evidence for Arjun |
+| D2 | **Our own agent** is primary; **Agent Bricks** side by side if it works on Free Edition | build-vs-buy evidence for the engagement lead |
 | D3 | **Lakebase** only if accessible, **started for the demo and stopped otherwise** (protect the Free Edition account); local dev on **Postgres + pgvector** (Docker) with the same SQL | SQLite only as a last fallback |
 | D4 | **Synthetic data only** | real data later in the client's environment and subscription |
 | D5 | **Own conversational UI** with a current chat design (not stock Streamlit) | React + TypeScript + Tailwind, built and served by the API |
