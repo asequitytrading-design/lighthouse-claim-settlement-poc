@@ -10,7 +10,7 @@
 # MAGIC | 1 workspace | identity, catalog and SQL warehouse work |
 # MAGIC | 2 migrations | Alembic upgrades the platform schemas to the head revision |
 # MAGIC | 3 objects | every table and view exists |
-# MAGIC | 4 catalog | `config/model_catalog.yaml` is synced into `ai_marketplace.model_catalog` (type-2 history) |
+# MAGIC | 4 catalog | `config/model_catalog.yaml` is synced into `ai_marketplace.model_catalog` (type-2 history) and the rate card into `model_price` |
 # MAGIC | 5 gateway | each approved/candidate model answers through **Unity Gateway**, with request tags |
 # MAGIC | 6 knowledge | synthetic examiner guidance is chunked and embedded through the gateway |
 # MAGIC | 7 vectors | Mosaic AI Vector Search endpoint + Delta Sync index answer a gateway-embedded query |
@@ -119,8 +119,10 @@ display(spark.sql(f"SELECT migration_run_id, intent, count(*) AS tables, max(rec
 
 # MAGIC %md
 # MAGIC ## Optional: prove a migration round trip
-# MAGIC Downgrade one revision (drops `model_invocation.served_model`), then upgrade again (re-adds
-# MAGIC the column and backfills it). Restore points for the downgrade are printed.
+# MAGIC Downgrade the newest revision (`0003_model_cost`: drops the rate card table and the cost
+# MAGIC views), then upgrade again (recreates them) and re-load the rate card from
+# MAGIC `config/model_pricing.yaml` (reference data comes back from its source, not from the
+# MAGIC migration). Restore points for the downgrade are printed.
 
 # COMMAND ----------
 
@@ -131,6 +133,10 @@ if dbutils.widgets.get("demo_round_trip") == "true":
     print("\n".join(migrator.restore_statements(down_run)))
     migrator.upgrade("head")
     print("After upgrade:  ", migrator.current())
+    from lighthouse_poc.platform.model_catalog import load_model_catalog
+    from lighthouse_poc.platform.pricing import RateCardSync, load_rate_card
+    rates = RateCardSync(names, logger).sync(engine, load_rate_card(models=load_model_catalog()))
+    print("Rate card re-loaded:", rates, "rows")
 
 # COMMAND ----------
 

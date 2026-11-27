@@ -2,6 +2,11 @@
 # MAGIC %md
 # MAGIC # Lighthouse prompt registry and synthetic claim settlement evaluation
 # MAGIC Synthetic records only. Select an approved Unity Gateway model service in this workspace.
+# MAGIC
+# MAGIC > **Superseded by `05_prompt_experiments_guide`**, which runs the same flow through the
+# MAGIC > application's own commands (`lighthouse try / eval / promote`) with hard gates, rubric and
+# MAGIC > judges. This notebook is kept for reference; its model calls are tagged and recorded as
+# MAGIC > activity `notebook` (ADR-013).
 
 # COMMAND ----------
 import json, logging, os, sys
@@ -18,6 +23,7 @@ from lighthouse_poc.prompt_registry import MLflowPromptRegistry
 from lighthouse_poc.prompts import PromptResolver
 from lighthouse_poc.logging_config import configure_logging
 from lighthouse_poc.scorers import build_scorers
+from lighthouse_poc.platform.usage_recorder import tracked_run
 
 logger=configure_logging()
 dbutils.widgets.text("prompt_name","main.default.claim_settlement_review")
@@ -28,6 +34,8 @@ dbutils.widgets.text("application_version","0.1.0")
 dbutils.widgets.text("prompt_version","@champion")  # <version> | @<alias> | latest
 dbutils.widgets.text("register_new_prompt","false")
 name=dbutils.widgets.get("prompt_name").strip()
+from databricks.sdk import WorkspaceClient
+os.environ.setdefault("DATABRICKS_HOST", WorkspaceClient().config.host)
 profile=load_profile("databricks")
 model_service=dbutils.widgets.get("model_alias").strip()
 mlflow.set_experiment(dbutils.widgets.get("experiment_name").strip())
@@ -62,7 +70,11 @@ scorers,judge,scorer_manifest=build_scorers(profile,"llm-judges",dbutils.widgets
 manifest={"application_version":dbutils.widgets.get("application_version"),
           "prompt_name":name,"prompt_version":prompt_version,"model_service":model_service,
           "dataset_version":"1.1.0",**scorer_manifest}
-with judge.activated():
+# tagged + recorded: every app call (model_invocation) and the judge calls (gateway request tags)
+with tracked_run(profile,logger,"notebook",prompt_name=name,prompt_version=prompt_version) as tracker, \
+        judge.activated(), mlflow.start_run(run_name=f"notebook01-{model_service}-p{prompt_version}") as run:
+    tracker.update(run_id=run.info.run_id)
+    scorers=scorers[:-len(judge.scorers())]+judge.scorers(tracker.judge_tags(judge.alias))
     result=MLflowEvaluationService(logger).run(records,predict_fn,scorers,manifest)
 display(result.tables)
 print("Review all cases and traces. This notebook never auto-publishes a prompt alias.")

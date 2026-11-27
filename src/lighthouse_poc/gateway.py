@@ -21,6 +21,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 from .config import AuthConfig, ModelRoute, Profile, require
 from .exceptions import ConfigurationError, ModelInvocationError
+from .usage import CallRecord, UsageTracker, active_tracker, context_from_profile
 
 
 @dataclass(frozen=True)
@@ -194,9 +195,11 @@ class GatewayChatClient:
 
     def __init__(self, base_url: str, route: ModelRoute, gateway_kind: str,
                  auth: AuthProvider, logger: logging.Logger, *, timeout_seconds: float = 120,
-                 max_retries: int = 1, client: Any = None):
+                 max_retries: int = 1, client: Any = None, tracker: UsageTracker | None = None):
         self._route, self._gateway_kind = route, gateway_kind
         self._auth, self._logger = auth, logger
+        # the active run's tracker wins; this one gives the profile's default tags
+        self._tracker = tracker or UsageTracker()
         self._request_model = route.request_model()
         if client is None:
             try:
@@ -219,7 +222,29 @@ class GatewayChatClient:
 
     def complete_messages(self, messages: list[dict],
                           tags: Mapping[str, Any] | None = None) -> Completion:
-        """One chat completion for an arbitrary message list (e.g. a registered chat prompt)."""
+        """One chat completion for an arbitrary message list (e.g. a registered chat prompt).
+
+        Tagged and recorded through the usage tracker (lighthouse_poc.usage); explicit `tags`
+        override the tracker's context for this call."""
+        tracker = active_tracker() or self._tracker
+        event_id, context, call_tags, owned = tracker.begin(self._route.alias, tags)
+        record = CallRecord(event_id, context, self._route.alias, self._request_model, "chat",
+                            trace_id=_current_trace_id())
+        started = time.perf_counter()
+        try:
+            completion = self._complete(messages, call_tags)
+            record.input_tokens, record.output_tokens = (completion.prompt_tokens,
+                                                         completion.completion_tokens)
+            record.served_model = completion.served_model
+            return completion
+        except ModelInvocationError as exc:
+            record.status, record.error_category = "error", exc.category
+            raise
+        finally:
+            record.latency_ms = round((time.perf_counter() - started) * 1000)
+            tracker.finish(record, owned)
+
+    def _complete(self, messages: list[dict], tags: Mapping[str, Any]) -> Completion:
         correlation_id = _current_trace_id() or str(uuid.uuid4())
         started = time.perf_counter()
         log = {"model_alias": self._route.alias, "gateway": self._gateway_kind,
@@ -335,8 +360,9 @@ class GatewayEmbeddingClient:
 
     def __init__(self, base_url: str, route: ModelRoute, gateway_kind: str,
                  auth: AuthProvider, logger: logging.Logger, *, timeout_seconds: float = 120,
-                 max_retries: int = 1, client: Any = None):
+                 max_retries: int = 1, client: Any = None, tracker: UsageTracker | None = None):
         self._route, self._gateway_kind, self._logger = route, gateway_kind, logger
+        self._tracker = tracker or UsageTracker()
         self._request_model = route.request_model()
         if client is None:
             try:
@@ -364,6 +390,25 @@ class GatewayEmbeddingClient:
     def embed(self, texts: list[str], tags: Mapping[str, Any] | None = None) -> Embeddings:
         if not texts:
             return Embeddings(vectors=[], duration_ms=0)
+        tracker = active_tracker() or self._tracker
+        event_id, context, call_tags, owned = tracker.begin(self._route.alias, tags,
+                                                           purpose="embedding_query")
+        record = CallRecord(event_id, context, self._route.alias, self._request_model,
+                            "embeddings", input_count=len(texts), trace_id=_current_trace_id())
+        started = time.perf_counter()
+        try:
+            embeddings = self._embed(texts, call_tags)
+            record.input_tokens, record.served_model = embeddings.prompt_tokens, embeddings.served_model
+            record.embedding_dimensions = embeddings.dimensions
+            return embeddings
+        except ModelInvocationError as exc:
+            record.status, record.error_category = "error", exc.category
+            raise
+        finally:
+            record.latency_ms = round((time.perf_counter() - started) * 1000)
+            tracker.finish(record, owned)
+
+    def _embed(self, texts: list[str], tags: Mapping[str, Any]) -> Embeddings:
         correlation_id = str(uuid.uuid4())
         started = time.perf_counter()
         log = {"model_alias": self._route.alias, "gateway": self._gateway_kind,
@@ -414,7 +459,8 @@ def build_embedding_model(profile: Profile, alias: str,
         profile.base_url_for(route), route, profile.gateway.kind,
         build_auth(profile.gateway.auth), logger,
         timeout_seconds=profile.gateway.timeout_seconds,
-        max_retries=profile.gateway.max_retries)
+        max_retries=profile.gateway.max_retries,
+        tracker=UsageTracker(context_from_profile(profile, purpose="embedding_query")))
 
 
 def _current_trace_id() -> str | None:
@@ -438,4 +484,5 @@ def build_chat_model(profile: Profile, alias: str | None, logger: logging.Logger
         profile.base_url_for(route), route, profile.gateway.kind,
         build_auth(profile.gateway.auth), logger,
         timeout_seconds=profile.gateway.timeout_seconds,
-        max_retries=profile.gateway.max_retries)
+        max_retries=profile.gateway.max_retries,
+        tracker=UsageTracker(context_from_profile(profile)))

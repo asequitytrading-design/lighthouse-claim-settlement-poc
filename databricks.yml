@@ -39,6 +39,12 @@ variables:
   medium_model_service:
     description: Unity Gateway model service for logical model claims-medium (Qwen 3.5 family, like local).
     default: system.ai.qwen35-122b-a10b
+  platform_prefix:
+    description: >-
+      Schema prefix of the AI Marketplace platform schemas (<prefix>ai_observability, ...).
+      Usage events of job runs are written there. Shared targets use "" (the dev target sets a
+      personal prefix, the same one notebooks 02-05 default to).
+    default: ""
   judge_model_service:
     description: Unity Gateway model service for logical judge claims-judge (different family from claims-medium).
     default: system.ai.gpt-oss-120b
@@ -48,6 +54,8 @@ targets:
   dev:
     mode: development
     default: true
+    variables:
+      platform_prefix: dev_${workspace.current_user.short_name}_
 
   # Shared deployment used by GitHub Actions (service principal or token identity).
   ci:

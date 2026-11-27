@@ -4,7 +4,8 @@ Steps, each reported as PASS / WARN / FAIL with a short detail:
   1 workspace   identity, catalog, SQL warehouse
   2 migrations  Alembic upgrade to head; applied revision == head
   3 objects     every platform table and view exists
-  4 catalog     config/model_catalog.yaml synced; current rows == YAML entries
+  4 catalog     config/model_catalog.yaml and the rate card config/model_pricing.yaml synced;
+                current catalog rows == YAML entries
   5 gateway     every approved/candidate model answers through Unity Gateway (embeddings: the
                 catalog's dimension); each call carries request tags and is recorded
   6 knowledge   synthetic documents chunked, embedded through the gateway, merged
@@ -19,16 +20,20 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from ..config import ModelRoute, Profile
-from ..gateway import GatewayChatClient, GatewayEmbeddingClient, build_auth
+from ..config import Profile
 from .knowledge import (KnowledgeStore, VectorIndexManager, chunk_document, load_documents,
                         search)
 from .migrations import SchemaMigrator
 from .model_catalog import ModelCatalogSync, ModelEntry, load_model_catalog
 from .naming import TABLE_SCHEMAS, PlatformNames
 from .observability import EventWriter, ModelInvocation, VectorQuery, new_event_id
+from .gateway_usage import GatewayUsageSync
+from .pricing import RateCardSync, load_rate_card
+from .runtime import catalog_chat_client, catalog_embedding_client
 
-VIEWS = ["v_model_catalog_current", "v_gateway_usage", "v_model_usage_daily", "v_eval_trend"]
+VIEWS = ["v_model_catalog_current", "v_gateway_usage", "v_model_usage_daily", "v_eval_trend",
+         "v_model_price", "v_model_call_cost", "v_model_cost_daily"]
+# gateway_usage (revision 0004) is a table too; TABLE_SCHEMAS lists it
 PROBE_USE_CASE = "platform_setup_verification"
 QUERY = ("Which documents should be in a life claim file, and what makes a beneficiary record "
          "conflicting?")
@@ -84,29 +89,17 @@ class SetupVerifier:
         with self._engine.connect() as connection:
             return [tuple(r) for r in connection.execute(text(sql), params or {}).fetchall()]
 
-    def _route(self, entry: ModelEntry, params: dict | None = None) -> ModelRoute:
-        return ModelRoute(alias=entry.key, upstream_model=entry.model_service,
-                          params=params or {}, task=entry.task)
-
     def _gateway_chat(self, entry: ModelEntry):
-        # reasoning models (qwen3.5) spend tokens before answering: leave room for that
-        route = self._route(entry, {"temperature": 0, "max_tokens": 1024})
-        return GatewayChatClient(self._profile.base_url_for(route), route, self._profile.gateway.kind,
-                                 build_auth(self._profile.gateway.auth), self._logger,
-                                 timeout_seconds=120, max_retries=1)
+        return catalog_chat_client(self._profile, entry, self._logger)
 
     def _gateway_embed(self, entry: ModelEntry):
-        route = self._route(entry)
-        return GatewayEmbeddingClient(self._profile.base_url_for(route), route,
-                                      self._profile.gateway.kind,
-                                      build_auth(self._profile.gateway.auth), self._logger,
-                                      timeout_seconds=120, max_retries=1)
+        return catalog_embedding_client(self._profile, entry, self._logger)
 
     def _event(self, entry: ModelEntry, purpose: str) -> ModelInvocation:
         return ModelInvocation(event_id=new_event_id(), status="ok", purpose=purpose,
                                model_key=entry.key, model_service=entry.model_service,
                                task=entry.task, environment=self._environment,
-                               use_case_id=PROBE_USE_CASE)
+                               use_case_id=PROBE_USE_CASE, activity="verify")
 
     def _embedding_entry(self) -> ModelEntry:
         key = self._profile.platform.embedding_model if self._profile.platform else "embed-default"
@@ -178,11 +171,15 @@ class SetupVerifier:
     def step_catalog(self) -> tuple[str, str]:
         self._entries = load_model_catalog()
         counts = ModelCatalogSync(self._names, self._logger).sync(self._engine, self._entries)
+        prices = load_rate_card(models=self._entries)
+        RateCardSync(self._names, self._logger).sync(self._engine, prices)
         current = self._query(f"SELECT count(*) FROM {self._names.table('model_catalog')} WHERE is_current")[0][0]
         if current != len(self._entries):
             return "FAIL", f"{current} current rows for {len(self._entries)} YAML entries"
+        illustrative = " (illustrative rates)" if any(p.price_source == "illustrative" for p in prices) else ""
         return "PASS", (f"{current} models current ({counts.get('opened', 0)} new/changed this sync); "
-                        f"approved: {', '.join(e.key for e in self._entries if e.status == 'approved')}")
+                        f"approved: {', '.join(e.key for e in self._entries if e.status == 'approved')}; "
+                        f"{len(prices)} rates synced{illustrative}")
 
     def step_gateway(self) -> tuple[str, str]:
         events, failures, notes = [], [], []
@@ -267,6 +264,7 @@ class SetupVerifier:
 
     def step_dashboard(self) -> tuple[str, str]:
         obs = f"{self._names.catalog}.{self._names.observability}"
+        GatewayUsageSync(self._names, self._logger).sync(self._engine)   # views read the copy
         today = self._query(
             f"SELECT coalesce(sum(calls), 0), coalesce(sum(gateway_confirmed), 0) FROM {obs}.v_model_usage_daily "
             f"WHERE use_case_id = :use_case AND event_date = current_date()", {"use_case": PROBE_USE_CASE})[0]

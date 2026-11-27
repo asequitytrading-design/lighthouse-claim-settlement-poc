@@ -35,7 +35,7 @@ class MLflowEvaluationService:
                 "prompt_version":manifest["prompt_version"],"model_service":manifest["model_service"],
                 "judge_model":manifest["judge_model"],
                 "application_version":manifest["application_version"],
-                "kpi_name":"evaluation_cases","kpi_value":len(data)})
+                "kpi_name":"evaluation_cases","kpi_value":len(data) if hasattr(data,"__len__") else None})
             return result
         except Exception as exc:
             self._logger.exception("evaluation_failed",extra={"error_type":type(exc).__name__})

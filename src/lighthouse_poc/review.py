@@ -72,6 +72,7 @@ class RunReview:
     verdict: str
     criteria_pass_rates: dict[str, float]
     judge_errors: int
+    recording: dict = field(default_factory=dict)   # where the run was recorded (ADR-016)
 
     def metrics(self) -> dict[str, float]:
         values = {"lighthouse/hard_gate_pass_rate": self.hard_gate_pass_rate,

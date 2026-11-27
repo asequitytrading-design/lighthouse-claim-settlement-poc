@@ -7,6 +7,7 @@ import mlflow
 
 from .exceptions import OutputValidationError
 from .gateway import ChatModel, Completion
+from .usage import case_scope
 
 _FENCE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL | re.IGNORECASE)
 
@@ -56,7 +57,10 @@ class ClaimSettlementAssistant:
         user = (f"Case ID: {case_id}\nSegment: {product_segment}\n"
                 f"Narrative: {claim_narrative}\nDocuments listed as received: "
                 f"{submitted_documents}\nContext: {policy_or_benefit_context}\nReturn JSON only.")
-        completion: Completion = self._model.complete(self._system_prompt(), user)
+        # usage attribution: the case and prompt version tag this call (lighthouse_poc.usage)
+        with case_scope(case_id=case_id, prompt_name=self._prompt_name,
+                        prompt_version=self._prompt_version, app_version=self._app_version):
+            completion: Completion = self._model.complete(self._system_prompt(), user)
         context = {"case_id": case_id, "prompt_name": self._prompt_name,
                    "prompt_version": self._prompt_version,
                    "application_version": self._app_version,

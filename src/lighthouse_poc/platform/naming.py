@@ -82,10 +82,12 @@ TABLE_SCHEMAS = {
     "use_case": lambda n: n.marketplace,
     "release_decision": lambda n: n.marketplace,
     "schema_migration_audit": lambda n: n.marketplace,
+    "model_price": lambda n: n.marketplace,
     "model_invocation": lambda n: n.observability,
     "eval_run": lambda n: n.observability,
     "eval_case_result": lambda n: n.observability,
     "vector_query": lambda n: n.observability,
+    "gateway_usage": lambda n: n.observability,
     "source_document": lambda n: n.knowledge,
     "document_chunk": lambda n: n.knowledge,
 }

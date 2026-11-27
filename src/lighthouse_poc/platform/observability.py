@@ -30,7 +30,7 @@ def utc_now() -> datetime:
 class ModelInvocation:
     event_id: str
     status: str                         # ok | error
-    purpose: str                        # app | judge | embedding_index | embedding_query | probe
+    purpose: str                        # app | judge | embedding_index | embedding_query | rerank | grounded_answer | probe
     model_key: str
     model_service: str
     task: str = "chat"
@@ -51,12 +51,14 @@ class ModelInvocation:
     input_count: int | None = None
     embedding_dimensions: int | None = None
     served_model: str | None = None
+    activity: str | None = None         # app | try | eval | demo | explorer | verify | notebook
 
     def request_tags(self) -> dict[str, str]:
         """Tags for the Databricks-Ai-Gateway-Request-Tags header (non-secret identifiers)."""
         tags = {"lh_event_id": self.event_id, "lh_purpose": self.purpose,
                 "lh_use_case": self.use_case_id, "lh_environment": self.environment,
-                "lh_prompt_version": self.prompt_version}
+                "lh_prompt_version": self.prompt_version, "lh_activity": self.activity,
+                "lh_model_key": self.model_key, "lh_run_id": self.run_id}
         return {k: v for k, v in tags.items() if v}
 
 
@@ -72,6 +74,11 @@ class VectorQuery:
     num_results: int | None = None
     latency_ms: int | None = None
     error_category: str | None = None
+
+
+def insert_statement(table: str, rows: list[Any]) -> str:
+    """INSERT ... VALUES for dataclass rows (field names are the columns)."""
+    return _insert(table, rows)
 
 
 def _insert(table: str, rows: list[Any]) -> str:

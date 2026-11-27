@@ -8,6 +8,13 @@ mlflow:
   tracking_uri: databricks
   registry_uri: databricks-uc   # prompts live in Unity Catalog (catalog.schema.name)
   experiment: ${LIGHTHOUSE_EXPERIMENT:-/Shared/lighthouse-claim-settlement-poc}
+  # Traces (spans, judge assessments, human labels) in Unity Catalog Delta tables next to the
+  # prompts: <catalog>.<schema>.<table_prefix>_otel_spans ... (ADR-017). Empty prefix:
+  # lh_<experiment name>. Falls back to MLflow storage, with a warning, where unavailable.
+  trace_storage:
+    catalog: ${LIGHTHOUSE_CATALOG:-workspace}
+    schema: ${LIGHTHOUSE_SCHEMA:-lighthouse}
+    table_prefix: ${LIGHTHOUSE_TRACE_TABLE_PREFIX:-}
 
 registry:
   # VERIFY: Free Edition workspaces normally expose the `workspace` catalog.
@@ -60,3 +67,6 @@ platform:
   warehouse_id: ${DATABRICKS_WAREHOUSE_ID:-}        # empty: the first available SQL warehouse
   vector_search_endpoint: ${LIGHTHOUSE_VS_ENDPOINT:-lighthouse-vs}   # Free Edition: one endpoint
   embedding_model: embed-default
+  # Attribution (ADR-013): every model call is tagged with these unless a run overrides them.
+  use_case: ${LIGHTHOUSE_USE_CASE:-claim_settlement_assistant}
+  environment: ${LIGHTHOUSE_ENVIRONMENT:-dev}       # dev | ci | prod (the bundle passes its target)

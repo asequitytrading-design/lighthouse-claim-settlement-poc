@@ -129,6 +129,16 @@ class PlatformConfig:
     warehouse_id: str | None = None
     vector_search_endpoint: str = "lighthouse-vs"
     embedding_model: str = "embed-default"
+    use_case: str = "claim_settlement_assistant"   # request tag lh_use_case of application calls
+    environment: str = "dev"                       # request tag lh_environment (dev | ci | prod)
+
+
+@dataclass(frozen=True)
+class TraceStorageConfig:
+    """Unity Catalog tables for the experiment's traces (Databricks only, ADR-017)."""
+    catalog: str
+    schema: str
+    table_prefix: str | None = None       # default: lh_<experiment name>
 
 
 @dataclass(frozen=True)
@@ -146,6 +156,7 @@ class Profile:
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     registry_uri: str | None = None
     platform: PlatformConfig | None = None
+    trace_storage: "TraceStorageConfig | None" = None
 
     def model(self, alias: str | None = None) -> ModelRoute:
         alias = alias or self.default_app_model
@@ -221,13 +232,20 @@ def _parse(name: str, data: Mapping, source: Path) -> Profile:
             schema_prefix=str(platform.get("schema_prefix") or ""),
             warehouse_id=str(platform["warehouse_id"]) if platform.get("warehouse_id") else None,
             vector_search_endpoint=str(platform.get("vector_search_endpoint") or "lighthouse-vs"),
-            embedding_model=str(platform.get("embedding_model") or "embed-default"))
+            embedding_model=str(platform.get("embedding_model") or "embed-default"),
+            use_case=str(platform.get("use_case") or "claim_settlement_assistant"),
+            environment=str(platform.get("environment") or "dev"))
     profile = Profile(
         name=name,
         environment=str(data.get("environment", name)),
         tracking_uri=mlflow_cfg.get("tracking_uri"),
         registry_uri=mlflow_cfg.get("registry_uri"),
         experiment=mlflow_cfg.get("experiment"),
+        trace_storage=(TraceStorageConfig(
+            catalog=str(mlflow_cfg["trace_storage"]["catalog"]),
+            schema=str(mlflow_cfg["trace_storage"]["schema"]),
+            table_prefix=str(mlflow_cfg["trace_storage"].get("table_prefix") or "") or None)
+            if isinstance(mlflow_cfg.get("trace_storage"), Mapping) else None),
         prompt_name=registry.get("prompt_name"),
         gateway=GatewayConfig(
             kind=gateway_kind, base_url=gateway.get("base_url"),

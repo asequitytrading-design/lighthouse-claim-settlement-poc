@@ -27,6 +27,8 @@ from .exceptions import ConfigurationError, LighthouseError, OutputValidationErr
 from .prompts import ResolvedPrompt
 from .review import RunReview, review_case, summarize
 from .rubric import EvalSpec, criterion_scorers, judge_scorers
+from .experiment_assets import ExperimentAssets, dataset_name_for, registrable_judge_model
+from .platform.observability import utc_now
 from .scorers import ERROR_KEY
 
 
@@ -134,6 +136,9 @@ class EvalRequest:
     use_judges: bool = True
     judge_alias: str | None = None
     run_name: str | None = None
+    all_records: list[dict] | None = None   # the whole golden set (records may be a --limit subset)
+    review_session: bool = False            # create a Review App labeling session for the run
+    reviewers: list[str] | None = None
 
 
 def git_commit() -> str:
@@ -148,6 +153,19 @@ def git_commit() -> str:
 def run_eval(profile: Profile, registry, logger: logging.Logger, request: EvalRequest,
              model_factory: Callable | None = None) -> tuple[RunReview, str]:
     """Run one evaluation; returns the combined review and the MLflow run ID."""
+    import mlflow
+
+    from .platform.usage_recorder import tracked_run
+
+    # Every model call of the run (app and judges) is tagged; app calls are recorded (ADR-013).
+    with tracked_run(profile, logger, "eval", prompt_name=request.prompt.name,
+                     prompt_version=request.prompt.label, app_version=__version__,
+                     git_commit=git_commit()) as tracker:
+        return _run_eval(profile, registry, logger, request, model_factory, tracker)
+
+
+def _run_eval(profile: Profile, registry, logger: logging.Logger, request: EvalRequest,
+              model_factory: Callable | None, tracker) -> tuple[RunReview, str]:
     import mlflow
 
     from .evaluation import MLflowEvaluationService
@@ -165,7 +183,6 @@ def run_eval(profile: Profile, registry, logger: logging.Logger, request: EvalRe
     scorers = criterion_scorers(spec)
     if request.use_judges and spec.judge_kinds():
         binding = build_judge_binding(profile, request.judge_alias)
-        scorers += judge_scorers(spec, binding.scorer_options())
 
     @mlflow.trace(name="evaluate_case")
     def predict_fn(**inputs):
@@ -194,15 +211,35 @@ def run_eval(profile: Profile, registry, logger: logging.Logger, request: EvalRe
         "pass_threshold": str(spec.scoring.pass_threshold),
     }
     run_name = request.run_name or f"{spec.name}-{prompt.label}-{route.alias}"
+    assets = ExperimentAssets(logger)
+    recording: dict[str, dict] = {}
+    started_at = utc_now()
     with ExitStack() as stack:
         stack.enter_context(scoped_environment(profile.evaluation.environment()))
         if binding:
             stack.enter_context(binding.activated())
         run = stack.enter_context(mlflow.start_run(run_name=run_name))
+        tracker.update(run_id=run.info.run_id)
+        experiment_id = run.info.experiment_id
+        if binding:   # built once the run exists, so judge calls carry its run ID as a tag
+            scorers += judge_scorers(spec, binding.scorer_options(tracker.judge_tags(binding.alias)))
+            judge_model = registrable_judge_model(binding.model_uri,
+                                                  profile.model(binding.alias).request_model())
+            recording["judge_registration"] = assets.register_judges(
+                experiment_id, judge_scorers(spec, {"model": judge_model}) if judge_model else [],
+                judge_model).as_dict()     # clean copies: no gateway headers are serialised
+        dataset_name = dataset_name_for(prompt.name, spec.name)
+        dataset, dataset_result = assets.eval_dataset(
+            dataset_name, experiment_id, request.all_records or request.records,
+            {"dataset_version": spec.dataset_version, "eval_spec": spec.name})
+        recording["eval_dataset"] = dataset_result.as_dict()
+        data = dataset if _covers(dataset, request.records) else request.records
         mlflow.log_params(manifest)
         mlflow.set_tags({"lighthouse.kind": "eval", "lighthouse.eval_spec": spec.name,
-                         "lighthouse.prompt_reference": prompt.reference})
-        result = MLflowEvaluationService(logger).run(request.records, predict_fn, scorers, manifest)
+                         "lighthouse.prompt_reference": prompt.reference,
+                         "lighthouse.eval_dataset": dataset_name,
+                         "lighthouse.eval_dataset_linked": str(data is dataset).lower()})
+        result = MLflowEvaluationService(logger).run(data, predict_fn, scorers, manifest)
         judges_run = spec.judge_kinds() if binding else []
         review = summarize(_case_reviews(result.result_df, spec, judges_run), spec)
         mlflow.log_metrics(review.metrics())
@@ -210,10 +247,47 @@ def run_eval(profile: Profile, registry, logger: logging.Logger, request: EvalRe
         mlflow.set_tags({"lighthouse.verdict": review.verdict,
                          "lighthouse.served_models": ",".join(sorted(model.served_models)) or "none"})
         _log_case_scores(review, logger)
+        trace_ids = [c.trace_id for c in review.cases if c.trace_id]
+        recording["prompt_link"] = assets.link_prompt(run.info.run_id, prompt, trace_ids).as_dict()
+        if request.review_session:
+            recording["review_session"] = assets.review_session(
+                f"{prompt.name.rsplit('.', 1)[-1]}-v{prompt.label}-{run.info.run_id[:8]}",
+                trace_ids, request.reviewers or []).as_dict()
+    recording["platform_records"] = _record_platform(
+        profile, logger, review, run.info.run_id, experiment_id, manifest, route, started_at)
+    review.recording = recording
     logger.info("prompt_eval_completed", extra={
         "prompt_name": prompt.name, "prompt_version": prompt.label, "model_alias": route.alias,
         "run_id": run.info.run_id, "kpi_name": "combined_score", "kpi_value": review.combined_mean})
     return review, run.info.run_id
+
+
+def _covers(dataset, records: list[dict]) -> bool:
+    """Evaluate against the registered dataset only when it holds exactly these records."""
+    if dataset is None:
+        return False
+    try:
+        frame = dataset.to_df()
+        return sorted(_key(i) for i in frame["inputs"]) == sorted(_key(r["inputs"]) for r in records)
+    except Exception:
+        return False
+
+
+def _record_platform(profile: Profile, logger: logging.Logger, review: RunReview, run_id: str,
+                     experiment_id: str, manifest: dict, route, started_at) -> dict:
+    """eval_run + eval_case_result rows in Unity Catalog (Databricks profile only)."""
+    from .platform.eval_records import eval_rows
+    from .platform.usage_recorder import PlatformWriter, should_record
+    if not should_record(profile):
+        return {"name": "platform_records", "status": "skipped",
+                "detail": "not a Databricks platform profile (or LIGHTHOUSE_RECORD_USAGE=false)"}
+    rows = eval_rows(review, run_id=run_id, experiment_id=experiment_id,
+                     use_case_id=profile.platform.use_case, manifest=manifest,
+                     model_service=route.request_model() or None, started_at=started_at,
+                     finished_at=utc_now())
+    result = PlatformWriter(profile, logger).write(rows, "evaluation rows")
+    return {"name": "platform_records", "status": "done" if result.status == "written" else "skipped",
+            "detail": result.detail}
 
 
 def _case_reviews(frame, spec: EvalSpec, judge_kinds: list[str]):

@@ -7,8 +7,13 @@ resources:
       comment: Lighthouse POC prompts (synthetic claim data only).
 
   experiments:
+    # Archive: runs and traces before 2026-11-27 (traces in MLflow storage; an experiment that
+    # already holds traces cannot be linked to Unity Catalog trace tables). Kept read-only.
     lighthouse_eval:
       name: /Workspace/Users/${workspace.current_user.userName}/lighthouse-claim-settlement-poc-${bundle.target}
+    # Active experiment: its traces are stored in Unity Catalog (ADR-017), linked on first use.
+    lighthouse_eval_uc:
+      name: /Workspace/Users/${workspace.current_user.userName}/lighthouse-claim-settlement-poc-uc-${bundle.target}
 
   jobs:
     lighthouse_prompt_eval:
@@ -49,6 +54,8 @@ resources:
               - openai>=1.0
               - pyyaml>=6
               - databricks-agents>=1.13   # Databricks-managed judges (model URI "databricks")
+              - databricks-sqlalchemy>=2.0.8,<3   # usage events -> ai_observability (ADR-013)
+              - alembic>=1.13,<2                  # schema revision check before writing events
 
       tasks:
         - task_key: register_prompt
@@ -87,9 +94,13 @@ resources:
               - --env
               - LIGHTHOUSE_SCHEMA=${resources.schemas.lighthouse.name}
               - --env
-              - LIGHTHOUSE_EXPERIMENT=${resources.experiments.lighthouse_eval.name}
+              - LIGHTHOUSE_EXPERIMENT=${resources.experiments.lighthouse_eval_uc.name}
               - --env
               - GIT_COMMIT=${bundle.git.commit}
+              - --env
+              - LIGHTHOUSE_PLATFORM_PREFIX=${var.platform_prefix}
+              - --env
+              - LIGHTHOUSE_ENVIRONMENT=${bundle.target}
               - --env
               - UNITY_GATEWAY_SMALL_MODEL=${var.small_model_service}
               - --env
@@ -110,3 +121,42 @@ resources:
               - "{{job.parameters.judge_model}}"
               - --limit
               - "{{job.parameters.limit}}"
+
+    # Keeps <prefix>ai_observability.gateway_usage (the local copy of system.ai_gateway.usage
+    # that the usage/cost views and the dashboard read, revision 0004) up to date. In the dev
+    # target, development mode pauses the schedule: unpause it in the Jobs UI, or run the sync
+    # from notebook 04 / `lighthouse platform usage sync`.
+    lighthouse_platform_usage_sync:
+      name: lighthouse-platform-usage-sync-${bundle.target}
+      description: Copies new Unity Gateway usage rows (with Lighthouse request tags) into ai_observability.gateway_usage.
+      max_concurrent_runs: 1
+      timeout_seconds: 900
+      schedule:
+        quartz_cron_expression: "0 5 * * * ?"     # hourly, 5 minutes past
+        timezone_id: UTC
+      tags:
+        project: lighthouse-poc
+        data: synthetic
+      environments:
+        - environment_key: platform
+          spec:
+            environment_version: "5"
+            dependencies:
+              - pyyaml>=6
+              - openai>=1.0
+              - databricks-sqlalchemy>=2.0.8,<3
+      tasks:
+        - task_key: usage_sync
+          environment_key: platform
+          spark_python_task:
+            python_file: ../scripts/lighthouse.py
+            parameters:
+              - --profile
+              - databricks
+              - platform
+              - usage
+              - sync
+              - --env
+              - LIGHTHOUSE_CATALOG=${var.catalog}
+              - --prefix
+              - ${var.platform_prefix}

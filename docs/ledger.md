@@ -9,12 +9,14 @@ session; newest entries first. Synthetic data only.
 dev deployment manually, then asks for the PR.
 
 **Next session, start with:**
-1. User runs `notebooks/02_ai_marketplace_platform_setup.py` on Databricks (after
-   `databricks bundle deploy`; default prefix `dev_<user>_`) and reviews the platform design
-   (`docs/ai-marketplace-platform.md`, ADR-012/013). Fix what they hit.
+1. User explores with `notebooks/03_explore_platform_data.py` and runs
+   `notebooks/04_observability_dashboard.py` (dashboard already deployed to
+   `/Workspace/Users/<user>/lighthouse/AI Marketplace observability (dev_asequitytrading_)`).
+   Widget rendering was not checked visually by Claude (no browser): fix any widget the user
+   reports in `platform/dashboard.py`. Replace illustrative rates when contract rates exist.
 2. Next platform phase on request: applications write `model_invocation` with request tags
    (agent, `lighthouse try/eval`), `eval_run` from `lighthouse eval`, `release_decision` from
-   `lighthouse promote`; bundle task `platform_migrate`; AI/BI dashboard.
+   `lighthouse promote`; bundle task `platform_migrate`.
 3. Commit and push the platform work and the local-test wrap-up when asked; PR for
    `feat/lighthouse-cli` when asked (A2).
 
@@ -68,6 +70,71 @@ gemma4-e4b-32k (judge).
   `DATABRICKS_CLIENT_SECRET` (expires 2027-02-23).
 
 ## Progress log
+
+### 2026-11-27 (traces in Unity Catalog, gated promote; ADR-017)
+- Traces stored in UC tables `workspace.dev_<user>_lighthouse.lh_<experiment>_*` via
+  `tracking.activate_experiment` (table-prefix form; schema form disabled on Free Edition).
+- New bundle experiment `lighthouse-claim-settlement-poc-uc-dev` (old one is an archive: an
+  experiment with traces cannot be linked). Live: drafts and v4 evaluated READY, all recording DONE.
+- Notebook 05 step 9: promotes only when registered + READY + no gate failed + score >= 80%;
+  running it is the human approval. Not run by Claude.
+- Prompts tab on Databricks lists prompts by the selected catalog/schema (filters unsupported).
+
+### 2026-11-27 (evaluation and review recording, ADR-016)
+- `experiment_assets.py` (capability-checked) + `platform/eval_records.py` + `PlatformWriter`:
+  eval links the prompt version to run and traces, upserts the UC eval dataset
+  `<catalog>.<prompt schema>.claim_settlement_review_golden`, registers the 3 judges
+  (`databricks:/databricks-gpt-oss-120b`), creates a Review App session (`--review-session`),
+  writes `eval_run` + `eval_case_result`; promote logs a HUMAN `lighthouse_release_review`
+  assessment and a `release_decision` row.
+- Free Edition, live 2026-11-27: all five work. Databricks quirks handled: dataset search
+  rejects `filter_string`, dataset tags not supported, search results must be re-fetched by name
+  to update; judge registration needs `databricks:/` models; labeling sessions need a schema.
+- Notebook 05 live: v4 registered, run `dfaf84fb...` BLOCKED (hard gate pass 0.83), 67 UC rows,
+  review session created; promote dry run refused (correct). Real promote left to the user.
+
+### 2026-11-27 (grounded answers)
+- `platform/grounding.py`: `GroundedAnswerer` answers only from retrieved passages or says
+  "I do not have this information in the knowledge base." (score 0). Checks: calibrated dense
+  confidence (floor 0.50, no model call below), `claims-small` answerability with citations and
+  quotes, verbatim quote verification. Notebook 03 cell 4E step 6. Live: 5/5 out-of-knowledge
+  questions refused, 4/4 sample questions grounded. Uncommitted.
+
+### 2026-11-27 (attribution everywhere, notebook 05)
+- ADR-015: usage tracker in every gateway client (profile defaults, run, case), judges tagged via
+  scorer headers, app calls recorded per run (`tracked_run` in `try_case`, `run_eval`,
+  `scripts/evaluate.py`, notebook 01). Revision 0004: `gateway_usage` copy + views on it,
+  `model_invocation.activity`; dashboard Activity filter; hourly job
+  `lighthouse-platform-usage-sync` (paused in dev mode); CLI `lighthouse platform usage sync`.
+- Storage/latency analysis (system.query.history): slow queries were planning on
+  `system.ai_gateway.usage` (~2 s each), not missing partitions; views now 4-5× faster.
+- Live: `lighthouse try` (claims-small, CSET-STD-001) and `lighthouse eval --limit 2`
+  (claims-medium + claims-judge, run `f46ac8081b1e43c494154f94187dc428`, READY) recorded 4 app
+  events with activity/run/case/prompt version.
+- Notebook `05_prompt_experiments_guide.py` (team guide: registry → draft → try → register
+  (optional) → eval vs baseline → MLflow → promote dry run → tracked usage).
+
+### 2026-11-27 (vector search explorer)
+- Notebook 03 section 4: chunking/indexing explained at the top, 15 synthetic sample queries,
+  five retrieval strategies (`platform/retrieval.py`), comparison and recommendation. Live run on
+  the dev prefix: all hit@3 = 1.0; MRR dense 0.956, hybrid 0.911, filtered_hybrid 0.956,
+  parent_document 0.911, llm_rerank 1.000 (~2.4 s/query). Built-in reranker not enabled on
+  Free Edition. Strategy choice for the assistant is a proposal awaiting the user.
+- Unattributed gateway usage explained: 49 untagged calls, all by the user's identity, made before
+  request tagging existed (2026-11-25 eval/judge runs; 2026-11-27 Claude's model probes).
+  Applications (eval, try, agent) still do not tag calls: next platform phase.
+
+### 2026-11-27 (later)
+- Notebook 02 run by the user on Databricks: `dev_asequitytrading_ai_*` created, 8 events.
+- Revision `0003_model_cost` (ADR-014): `model_price` rate card (`config/model_pricing.yaml`,
+  illustrative rates), views `v_model_price`, `v_model_call_cost`, `v_model_cost_daily`.
+  Applied to the dev prefix; live downgrade/upgrade round trip OK.
+- Notebook `03_explore_platform_data.py` (3 cells per schema; all 30 queries checked against the
+  dev prefix) and `04_observability_dashboard.py` (step-by-step dashboard build).
+- AI/BI dashboard deployed and published from code (id `01f1ea1a597b1c13818274593514d3dc`).
+- Sample traffic (Claude, dev prefix): 16 real gateway calls, 2 `empty_response` errors;
+  12 bogus error rows from a first attempt without `DATABRICKS_HOST` deleted (the generator now
+  stops on configuration errors instead of recording them).
 
 ### 2026-11-27
 - Local MLflow UI/eval walkthrough wrapped up (meeting-summariser case closed; results in the

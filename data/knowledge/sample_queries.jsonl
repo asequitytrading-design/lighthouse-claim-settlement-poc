@@ -1,0 +1,15 @@
+{"query_id": "q01", "query": "What documents should a short-term disability claim file contain?", "expected_doc_id": "kb-std-evidence", "style": "keyword"}
+{"query_id": "q02", "query": "The last day worked on the claimant form does not match what the employer reported", "expected_doc_id": "kb-std-evidence", "style": "paraphrase"}
+{"query_id": "q03", "query": "Treating provider records stop before the elimination period ends", "expected_doc_id": "kb-ltd-evidence", "style": "keyword"}
+{"query_id": "q04", "query": "A functional capacity evaluation is mentioned but nobody attached it", "expected_doc_id": "kb-ltd-evidence", "style": "paraphrase"}
+{"query_id": "q05", "query": "Which papers do we need after the insured person has passed away?", "expected_doc_id": "kb-life-evidence", "style": "paraphrase"}
+{"query_id": "q06", "query": "One of the named beneficiaries has no proof of identity", "expected_doc_id": "kb-life-evidence", "style": "keyword"}
+{"query_id": "q07", "query": "Date of birth on the certificate is different from the policy record", "expected_doc_id": "kb-life-evidence", "style": "keyword"}
+{"query_id": "q08", "query": "The injury date in the incident report and the first doctor visit disagree", "expected_doc_id": "kb-accident-evidence", "style": "paraphrase"}
+{"query_id": "q09", "query": "Claimant referred to a police report that was never sent to us", "expected_doc_id": "kb-accident-evidence", "style": "paraphrase"}
+{"query_id": "q10", "query": "Specialist report refers to test results that are not in the file", "expected_doc_id": "kb-ci-evidence", "style": "keyword"}
+{"query_id": "q11", "query": "The illness named on the claim form differs from what the consultant confirmed", "expected_doc_id": "kb-ci-evidence", "style": "paraphrase"}
+{"query_id": "q12", "query": "A procedure on the itemised statement has no treatment date", "expected_doc_id": "kb-dental-evidence", "style": "keyword"}
+{"query_id": "q13", "query": "The amount charged is higher than the estimate sent before treatment", "expected_doc_id": "kb-dental-evidence", "style": "paraphrase"}
+{"query_id": "q14", "query": "What value must benefit_determination always have?", "expected_doc_id": "kb-handoff-format", "style": "exact_term"}
+{"query_id": "q15", "query": "How should the note for the human examiner be organised and what must it never decide?", "expected_doc_id": "kb-handoff-format", "style": "paraphrase"}

@@ -221,11 +221,9 @@ def try_case(ctx: Context, prompt: ResolvedPrompt, record: dict, model_alias: st
 
     Traced as its own MLflow trace (tag lighthouse.kind=try) so the developer can open it.
     """
-    import mlflow
-
     from .agent import ClaimSettlementAssistant
     from .gateway import ServedModelRecorder, build_chat_model
-    from .scorers import ERROR_KEY
+    from .platform.usage_recorder import tracked_run
 
     route = ctx.profile.model(model_alias)
     model = ServedModelRecorder((model_factory or build_chat_model)(ctx.profile, route.alias,
@@ -234,6 +232,17 @@ def try_case(ctx: Context, prompt: ResolvedPrompt, record: dict, model_alias: st
                                          prompt.label, __version__, prompt=prompt)
     inputs = record["inputs"]
     trace_ids: list[str] = []
+    # every model call of the trial is tagged and recorded (activity "try", ADR-013)
+    with tracked_run(ctx.profile, ctx.logger, "try", prompt_name=prompt.name,
+                     prompt_version=prompt.label, app_version=__version__):
+        return _try_case(ctx, prompt, record, route, model, assistant, inputs, trace_ids)
+
+
+def _try_case(ctx: Context, prompt: ResolvedPrompt, record: dict, route, model, assistant,
+              inputs: dict, trace_ids: list[str]) -> dict:
+    import mlflow
+
+    from .scorers import ERROR_KEY
 
     @mlflow.trace(name="try_case")
     def run(**case_inputs):
@@ -279,7 +288,8 @@ def cmd_try(ctx: Context, args) -> int:
     else:
         prompt = ctx.resolver.resolve(args.prompt)
     record = find_case(load_golden_records(args.dataset), args.case)
-    mlflow.set_experiment(args.experiment or require(ctx.profile.experiment, "mlflow.experiment"))
+    from .tracking import activate_experiment
+    activate_experiment(ctx.profile, ctx.logger, args.experiment)
     result = try_case(ctx, prompt, record, args.model)
     if args.json:
         print(json.dumps(result, indent=2, default=str), file=ctx.out)
@@ -363,10 +373,10 @@ def cmd_eval(ctx: Context, args) -> int:
             baseline = None
     if args.scorer_mode == "deterministic":
         args.no_judges = True
-    mlflow.set_experiment(args.experiment or require(ctx.profile.experiment, "mlflow.experiment"))
-    records, dataset_label = load_records(spec, args.dataset)
-    if args.limit and args.limit > 0:
-        records = records[: args.limit]
+    from .tracking import activate_experiment
+    activate_experiment(ctx.profile, ctx.logger, args.experiment)
+    all_records, dataset_label = load_records(spec, args.dataset)
+    records = all_records[: args.limit] if args.limit and args.limit > 0 else all_records
 
     def evaluate(prompt: ResolvedPrompt):
         print(f"evaluating {prompt.name} {prompt.reference} -> {prompt.label} on {len(records)} "
@@ -377,7 +387,8 @@ def cmd_eval(ctx: Context, args) -> int:
             return run_eval(ctx.profile, ctx.registry, ctx.logger, EvalRequest(
                 spec=spec, prompt=prompt, model_alias=args.model, records=records,
                 dataset_label=dataset_label, use_judges=not args.no_judges,
-                judge_alias=args.judge_model))
+                judge_alias=args.judge_model, all_records=all_records,
+                review_session=args.review_session, reviewers=args.review_user or []))
 
     review, run_id = evaluate(candidate)
     result = {"candidate": {"run_id": run_id, "prompt_version": candidate.label, **review.to_dict()}}
@@ -391,6 +402,7 @@ def cmd_eval(ctx: Context, args) -> int:
         print(json.dumps(result, indent=2, default=str), file=ctx.out)
     else:
         render_review(review, ctx.out, run_id, f"candidate {candidate.reference} ({candidate.label})")
+        render_recording(review.recording, ctx.out)
         if base_review:
             print("", file=ctx.out)
             render_review(base_review, ctx.out, result["baseline"]["run_id"],
@@ -405,6 +417,35 @@ def cmd_eval(ctx: Context, args) -> int:
         print("Scores are review evidence for a human reviewer, not an approval. Open the run "
               "in MLflow to read judge rationales per trace.", file=ctx.out)
     return 1 if review.verdict == BLOCKED else 0
+
+
+def render_recording(recording: dict, out) -> None:
+    """Where a run or decision was recorded (MLflow experiment assets, Unity Catalog rows)."""
+    for item in recording.values():
+        print(f"recorded  {item['name']:<20} {item['status'].upper():<8} {item['detail']}", file=out)
+
+
+def _record_decision(ctx: Context, record, run) -> dict:
+    """Human assessment on the evidence traces + release_decision row (ADR-016); never raises."""
+    from .experiment_assets import ExperimentAssets, run_trace_ids
+    from .platform.eval_records import release_rows
+    from .platform.usage_recorder import PlatformWriter, should_record
+    recording = {"human_review": ExperimentAssets(ctx.logger).human_review(
+        run_trace_ids(run.info.experiment_id, run.info.run_id), record.decision,
+        record.reviewer, record.rationale, record.record_id).as_dict()}
+    if should_record(ctx.profile):
+        try:
+            service = ctx.profile.model(record.model_service).request_model() or None
+        except LighthouseError:
+            service = None
+        result = PlatformWriter(ctx.profile, ctx.logger).write(
+            release_rows(record, ctx.profile.platform.use_case, service), "release decision")
+        recording["platform_records"] = {"name": "platform_records", "detail": result.detail,
+                                         "status": "done" if result.status == "written" else "skipped"}
+    else:
+        recording["platform_records"] = {"name": "platform_records", "status": "skipped",
+                                         "detail": "not a Databricks platform profile"}
+    return recording
 
 
 # ---------------------------------------------------------------- promote (review gate)
@@ -446,6 +487,7 @@ def cmd_promote(ctx: Context, args) -> int:
     service.write(record)
     print(f"Recorded {decision} {record.record_id} by {record.reviewer} at {record.decided_at} "
           f"(run artifact approvals/{record.record_id}.json, prompt version tags).", file=ctx.out)
+    render_recording(_record_decision(ctx, record, run), ctx.out)
     if decision == APPROVE and record.previous_alias_version:
         print(f"Rollback: promote version {record.previous_alias_version} with its own approved "
               "evaluation run.", file=ctx.out)
@@ -510,21 +552,43 @@ def _platform_db_online(ctx: Context, args, names, migrator) -> int:
 
 def cmd_platform_models(ctx: Context, args) -> int:
     from .platform.model_catalog import ModelCatalogSync, load_model_catalog
+    from .platform.pricing import RateCardSync, load_rate_card
     entries = load_model_catalog(args.file)
+    prices = load_rate_card(args.pricing_file, models=entries)
     if args.models_command == "list":
+        latest = {p.model_key: p for p in sorted(prices, key=lambda p: p.effective_from)}
         for e in entries:
-            print(f"{e.key:<24} {e.task:<10} {e.status:<11} {','.join(e.roles):<16} {e.model_service}",
-                  file=ctx.out)
+            rate = latest.get(e.key)
+            price = (f"{rate.currency} {rate.input_per_1m_tokens:g}/{rate.output_per_1m_tokens:g} "
+                     f"per 1M in/out ({rate.price_source})" if rate else "no rate")
+            print(f"{e.key:<24} {e.task:<10} {e.status:<11} {','.join(e.roles):<16} "
+                  f"{e.model_service:<40} {price}", file=ctx.out)
         return 0
     names = _platform(ctx, args)
     engine = _engine(ctx, args, names)
     try:
         counts = ModelCatalogSync(names, ctx.logger).sync(engine, entries)
+        changed = RateCardSync(names, ctx.logger).sync(engine, prices)
     finally:
         engine.dispose()
     print(f"Synced {len(entries)} models into {names.table('model_catalog')}: "
           f"{counts.get('opened', 0)} new or changed, {counts.get('closed_removed', 0)} removed",
           file=ctx.out)
+    print(f"Synced {len(prices)} rates into {names.table('model_price')}: {changed} rows changed",
+          file=ctx.out)
+    return 0
+
+
+def cmd_platform_usage(ctx: Context, args) -> int:
+    from .platform.gateway_usage import GatewayUsageSync
+    names = _platform(ctx, args)
+    engine = _engine(ctx, args, names)
+    try:
+        inserted = GatewayUsageSync(names, ctx.logger, lookback_hours=args.lookback_hours).sync(engine)
+    finally:
+        engine.dispose()
+    print(f"Synced system.ai_gateway.usage -> {names.catalog}.{names.observability}.gateway_usage: "
+          f"{inserted} new rows (lookback {args.lookback_hours} h)", file=ctx.out)
     return 0
 
 
@@ -618,6 +682,11 @@ def build_parser() -> argparse.ArgumentParser:
     evaluation.add_argument("--limit", type=int, default=0, help="Evaluate only the first N cases")
     evaluation.add_argument("--experiment", help="Override the profile's MLflow experiment")
     evaluation.add_argument("--json", action="store_true", help="Machine-readable result")
+    evaluation.add_argument("--review-session", action="store_true",
+                            help="Also create a Review App labeling session with the run's traces "
+                                 "(skipped with a notice where the workspace does not offer it)")
+    evaluation.add_argument("--review-user", action="append",
+                            help="Reviewer (workspace user) assigned to the review session; repeatable")
     evaluation.set_defaults(handler=cmd_eval)
 
     promote = commands.add_parser(
@@ -655,10 +724,19 @@ def build_parser() -> argparse.ArgumentParser:
     db_actions["restore-sql"].add_argument("run_id", help="Migration run ID printed by upgrade")
     models = platform_commands.add_parser("models", help="Governed model catalog")
     models_commands = models.add_subparsers(dest="models_command", required=True, metavar="action")
-    model_actions = [models_commands.add_parser("list", help="Models in config/model_catalog.yaml"),
-                     models_commands.add_parser("sync", help="Merge the YAML into the catalog table")]
+    model_actions = [models_commands.add_parser("list", help="Models and rates from config/"),
+                     models_commands.add_parser("sync", help="Merge the model list and rate card "
+                                                             "into the catalog tables")]
     for sub in model_actions:
         sub.add_argument("--file", help="Model catalog YAML (default: config/model_catalog.yaml)")
+        sub.add_argument("--pricing-file", help="Rate card YAML (default: config/model_pricing.yaml)")
+    usage = platform_commands.add_parser("usage", help="Gateway usage copy for the dashboard")
+    usage_commands = usage.add_subparsers(dest="usage_command", required=True, metavar="action")
+    usage_sync = usage_commands.add_parser(
+        "sync", help="Copy new system.ai_gateway.usage rows into <obs>.gateway_usage")
+    usage_sync.add_argument("--lookback-hours", type=int, default=48,
+                            help="Re-scan this many hours before the newest copied row (default 48)")
+    usage_sync.set_defaults(handler=cmd_platform_usage)
     verify = platform_commands.add_parser(
         "verify", help="End-to-end check: migrations, catalog, gateway, knowledge, vectors, views")
     verify.add_argument("--no-migrate", action="store_true", help="Do not apply migrations")
@@ -667,7 +745,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Seconds to wait for the vector index (default 1800)")
     verify.add_argument("--environment", default="dev", help="Request tag lh_environment")
     verify.set_defaults(handler=cmd_platform_verify)
-    for sub in (*db_actions.values(), *model_actions, verify):
+    for sub in (*db_actions.values(), *model_actions, usage_sync, verify):
         _common(sub, suppress=True)
         sub.add_argument("--catalog", help="Override platform.catalog")
         sub.add_argument("--prefix", help="Override platform.schema_prefix (e.g. dev_<user>_)")
