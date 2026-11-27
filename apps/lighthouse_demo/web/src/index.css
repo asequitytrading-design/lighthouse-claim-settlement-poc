@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 250 250 249; --panel: 255 255 255; --sunken: 244 244 242; --line: 228 228 224;
+  --ink: 28 28 30; --muted: 110 110 115; --accent: 79 70 229;
+  --ok: 22 163 74; --warn: 202 138 4; --bad: 220 38 38;
+}
+.dark {
+  --bg: 17 17 19; --panel: 24 24 27; --sunken: 32 32 36; --line: 46 46 52;
+  --ink: 236 236 240; --muted: 150 150 160; --accent: 129 140 248;
+  --ok: 74 222 128; --warn: 250 204 21; --bad: 248 113 113;
+}
+html, body, #root { height: 100%; }
+body { @apply bg-bg text-ink font-sans antialiased; }
+.prose-chat { @apply text-[15px] leading-7; }
+.prose-chat p { @apply my-2; }
+.prose-chat ul { @apply list-disc pl-5 my-2; }
+.prose-chat ol { @apply list-decimal pl-5 my-2; }
+.prose-chat h1, .prose-chat h2, .prose-chat h3 { @apply font-semibold mt-4 mb-2; }
+.prose-chat h3 { @apply text-base; }
+.prose-chat code { @apply bg-sunken rounded px-1 py-0.5 text-[13px]; }
+.prose-chat pre { @apply bg-sunken rounded-lg p-3 overflow-x-auto text-[13px]; }
+.prose-chat table { @apply w-full text-sm border-collapse my-3; }
+.prose-chat th { @apply text-left font-medium border-b border-line py-1.5 pr-3; }
+.prose-chat td { @apply border-b border-line py-1.5 pr-3 align-top; }
+.prose-chat blockquote { @apply border-l-2 border-accent pl-3 text-muted italic my-2; }
+.scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: rgb(var(--line)); border-radius: 8px; }
+@keyframes pulse-dot { 0%, 100% { opacity: .3 } 50% { opacity: 1 } }
+.dot { animation: pulse-dot 1.2s infinite; }
