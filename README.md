@@ -12,19 +12,51 @@ Progress, environment state and open actions: [docs/ledger.md](docs/ledger.md).
 
 ## Local stack: MLflow + Kong AI gateway + Ollama
 
-Requirements: Docker Desktop (4 GB+ memory recommended), Ollama with the models in `kong/kong.yaml`, Python 3.10+.
+### Prerequisites
+
+| What | Needed for | Install / check |
+|---|---|---|
+| macOS or Linux (Windows via WSL2), **16 GB RAM** recommended | the local models; the `mock` model and the unit tests run anywhere | |
+| **git** | cloning | `git --version` |
+| **Python 3.10+** | the package, scripts and tests | `python3 --version` |
+| [**Docker Desktop**](https://www.docker.com/products/docker-desktop/) with **4 GB+ memory** (Settings → Resources) | MLflow, Kong AI gateway and its Postgres | `docker compose version` |
+| [**Ollama**](https://ollama.com/download) | real model calls through Kong (not needed for `--model mock`) | `ollama --version` |
+| `openssl` | generating the local secrets in `.env` | preinstalled on macOS/Linux |
+| Optional: [Databricks CLI](https://docs.databricks.com/aws/en/dev-tools/cli/install) and a Databricks workspace (Free Edition works) | the Databricks profile and bundle deploys only | `databricks --version` |
+
+No cloud account or API key is needed for the local stack.
+
+### Local models (once, ~21 GB)
+
+Kong routes the logical models to Ollama models with a 32k context (`kong/kong.yaml`). Pull the base
+models and create the 32k copies (same weights, no extra download):
 
 ```bash
-cp .env.example .env            # set KONG_API_KEY and KONG_PG_PASSWORD
+ollama pull qwen3.5:4b && ollama pull qwen3.5:9b && ollama pull gemma4:e4b
+for m in qwen3.5:4b qwen3.5:9b gemma4:e4b; do
+  printf 'FROM %s\nPARAMETER num_ctx 32768\n' "$m" > /tmp/Modelfile
+  ollama create "$(echo "$m" | tr ':' '-')-32k" -f /tmp/Modelfile   # qwen3.5-4b-32k, qwen3.5-9b-32k, gemma4-e4b-32k
+done
+```
+
+### Run
+
+```bash
+git clone https://github.com/asequitytrading-design/lighthouse-claim-settlement-poc.git
+cd lighthouse-claim-settlement-poc
+cp .env.example .env            # set KONG_API_KEY, KONG_PG_PASSWORD (openssl rand -hex 24) and MLFLOW_CRYPTO_KEK_PASSPHRASE (openssl rand -hex 32)
 docker compose up -d            # MLflow :5000, Kong proxy :8100, Admin API :8101, Manager :8102
 docker compose run --rm kong-seed
 python3 -m venv .venv && source .venv/bin/activate && python -m pip install -e '.[dev]'
+python -m pytest                # offline unit tests: a good first check
 python scripts/register_prompt.py --profile local
 python scripts/evaluate.py --profile local --prompt-version 1 --model mock           # plumbing only
 python scripts/evaluate.py --profile local --prompt-version 1 --model claims-medium  # qwen3.5-9b via Kong
 python scripts/evaluate.py --profile local --prompt-version 1 --model claims-medium --scorer-mode llm-judges  # + gemma4 judges
-python -m pytest
 ```
+
+Then open the MLflow UI at http://localhost:5000. Stop the stack with `docker compose down` (data is kept in
+Docker volumes). For Databricks, follow [docs/databricks-setup.md](docs/databricks-setup.md).
 
 Environment differences live in `config/profiles/{local,databricks}.yaml`; code uses logical model names (`claims-small`, `claims-medium`, `claims-judge`, `mock`) and the gateway picks the physical model. See [docs/local-development.md](docs/local-development.md) and [docs/decisions.md](docs/decisions.md). The mock validates plumbing only, not model quality. Never expose the local stack or place real claim data in it.
 
@@ -65,3 +97,14 @@ Business logic lives under `src/lighthouse_poc`. The notebook is an optional int
 - `.github/workflows/`: test, validate, deploy and smoke-run pipeline.
 
 Databricks Free Edition is personal, non-commercial, serverless-only and quota-limited. Use synthetic data only and an organization-approved workspace for client-facing or commercial demonstrations. See [Free Edition limitations](https://docs.databricks.com/aws/en/getting-started/free-edition-limitations).
+
+## Contributing
+
+`main` is protected: changes go through a pull request, and every pull request needs the owner's
+approval before it can be merged (see `.github/CODEOWNERS`). Fork the repo, run `python -m pytest`, and open
+a pull request against `main`. Use synthetic data only: never commit real claim data, client information,
+credentials or a filled-in `.env`.
+
+## License
+
+[MIT](LICENSE).

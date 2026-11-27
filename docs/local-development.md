@@ -21,7 +21,7 @@ MLflow OSS (localhost:5000)   prompt registry, evaluation runs, traces
 - Docker Desktop. **Give it at least 4 GB of memory** (Settings → Resources). At the
   2 GB default, MLflow (~1.2 GB) and Kong share the VM tightly; MLflow was OOM-killed
   once before Kong's worker count was reduced.
-- Ollama running on the host with the models in `kong/kong.yaml` pulled.
+- Ollama running on the host with the 32k models in `kong/kong.yaml` created (see "Local models" in the [README](../README.md)).
 - Python 3.10+ virtual environment: `python -m pip install -e '.[dev]'`.
 
 ## First-time setup
