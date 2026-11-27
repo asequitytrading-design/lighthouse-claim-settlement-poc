@@ -21,6 +21,8 @@ sync:
     - docker-compose.yml
     - tests/**
     - .github/**
+    - scripts/meeting_summary_format_judge.py   # local-only experiment (never on Databricks)
+    - scripts/meeting_summariser_iterate.py      # local-only experiment (never on Databricks)
 
 variables:
   catalog:
