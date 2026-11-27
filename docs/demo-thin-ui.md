@@ -126,7 +126,7 @@ Modern conversational layout (in the style of current chat products):
 | 0 | Branch, design doc, tool-calling check | done (32/32) |
 | 1 | Synthetic claim data + UC function + Genie space; MCP client + `ToolProvider`; tool round trip from Python | **done 2026-11-27**: all three tools live via managed MCP |
 | 2 | `AgentService` (loop, streaming events, guardrails, usage tags) + tests with fake tools | **done 2026-11-27**: 6 demo questions live (incl. fraud, pet insurance, off-topic refusals) |
-| 3 | FastAPI app: chat SSE, models, playground, usage, evals, health; tests with fakes | `pytest`; curl the endpoints |
+| 3 | FastAPI app: chat SSE, models, playground, usage, evals, health; tests with fakes | **done 2026-11-27**: all endpoints live locally (port 8787) + `/api/warmup` |
 | 4 | React UI: chat (streaming, tool cards, citations), playground, dashboard, evals | demo script runs end to end locally |
 | 5 | Session store + semantic cache on local Postgres; Lakebase start/stop; try it once | cache hit shown; Lakebase started/stopped |
 | 6 | Agent Bricks attempt (Knowledge Assistant on the guidance docs) + side-by-side panel | works, or documented as unavailable |

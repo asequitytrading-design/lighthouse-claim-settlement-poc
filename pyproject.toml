@@ -12,6 +12,8 @@ lighthouse = "lighthouse_poc.cli:main"
 dev = ["pytest>=8"]
 # AI Marketplace data platform on Unity Catalog (ADR-012/013): schema migrations, Vector Search.
 platform = ["alembic>=1.13,<2", "databricks-sqlalchemy>=2.0.8,<3", "databricks-vectorsearch>=0.57"]
+# Demo app: API layer and server (docs/demo-thin-ui.md); psycopg for Postgres/Lakebase sessions.
+app = ["fastapi>=0.110", "uvicorn>=0.29"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

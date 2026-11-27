@@ -21,3 +21,4 @@ dist/
 
 # editor swap files
 *.swp
+.lighthouse/

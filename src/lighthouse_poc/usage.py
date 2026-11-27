@@ -30,7 +30,7 @@ TAG_NAMES = {"use_case_id": "lh_use_case", "purpose": "lh_purpose", "environment
              "activity": "lh_activity", "prompt_version": "lh_prompt_version", "run_id": "lh_run_id"}
 
 # Activities: what kind of work made the call (dashboard filter "activity").
-ACTIVITIES = {"app", "try", "eval", "demo", "explorer", "verify", "notebook"}
+ACTIVITIES = {"app", "try", "eval", "demo", "explorer", "verify", "notebook", "playground"}
 
 
 @dataclass(frozen=True)

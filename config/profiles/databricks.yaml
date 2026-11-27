@@ -41,6 +41,13 @@ models:
   claims-judge:
     upstream_model: ${UNITY_GATEWAY_JUDGE_MODEL}
     params: {temperature: 0}
+  # candidate app models (config/model_catalog.yaml): Playground comparison and model switching
+  claims-alt-qwen-next:
+    upstream_model: ${UNITY_GATEWAY_ALT_QWEN_MODEL:-system.ai.qwen3-next-80b-a3b-instruct}
+    params: {temperature: 0}
+  claims-alt-llama:
+    upstream_model: ${UNITY_GATEWAY_ALT_LLAMA_MODEL:-system.ai.llama-4-maverick}
+    params: {temperature: 0}
   embed-default:                 # knowledge-base + query embeddings (config/model_catalog.yaml)
     task: embeddings
     upstream_model: ${UNITY_GATEWAY_EMBEDDING_MODEL:-system.ai.qwen3-embedding-0-6b}
