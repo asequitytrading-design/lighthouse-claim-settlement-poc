@@ -1,4 +1,7 @@
-# Test on every push/PR; deploy the Databricks bundle (target `ci`) from main or on demand.
+# Test on every push/PR. Deploy the Databricks bundle (target `ci`) only on demand (Actions ->
+# databricks-bundle -> Run workflow): automatic deploys from main are OFF to save Free Edition
+# capacity. Turn them on with the repository variable DEPLOY_ON_MAIN=true (and RUN_JOB_ON_MAIN=true
+# to also run the evaluation job after each deploy).
 #
 # Repository configuration (Settings -> Environments -> "databricks"):
 #   variables: DATABRICKS_HOST                      (required, e.g. https://dbc-xxxx.cloud.databricks.com)
@@ -17,9 +20,9 @@ on:
   workflow_dispatch:
     inputs:
       run_job:
-        description: Run the evaluation job after deploying
+        description: Run the evaluation job after deploying (uses workspace compute and models)
         type: boolean
-        default: true
+        default: false
       app_model:
         description: Logical app model (mock needs no model access)
         default: mock
@@ -49,7 +52,7 @@ jobs:
 
   deploy:
     needs: test
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ON_MAIN == 'true')
     runs-on: ubuntu-latest
     environment: databricks
     permissions:
@@ -115,7 +118,7 @@ jobs:
         run: databricks bundle deploy
 
       - name: Run evaluation job
-        if: github.event_name == 'push' || inputs.run_job
+        if: inputs.run_job || (github.event_name == 'push' && vars.RUN_JOB_ON_MAIN == 'true')
         env:
           APP_MODEL: ${{ inputs.app_model || 'mock' }}
           SCORER_MODE: ${{ inputs.scorer_mode || 'deterministic' }}
