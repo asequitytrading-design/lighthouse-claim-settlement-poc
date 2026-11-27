@@ -165,3 +165,25 @@ def test_empty_model_replies_and_rate_limits_are_retried_once():
     assert [e.type for e in agent.run("q")][-3:] == ["error", "usage", "done"]       # only one retry
     agent, _ = _agent([ModelInvocationError("auth", "auth")], {})
     assert not any(e.data.get("status") == "retry" for e in agent.run("q"))            # not retryable
+
+
+def test_cached_factory_caches_values_and_failures_for_a_while():
+    from lighthouse_poc.agents.claims_copilot.agent import CachedFactory
+    now = [0.0]
+    calls = []
+
+    def load():
+        calls.append(now[0])
+        if now[0] < 100:
+            raise ConfigurationError("no @champion")
+        return "assistant"
+    factory = CachedFactory(load, retry_seconds=120, ttl_seconds=600, clock=lambda: now[0])
+    for t in (0, 50):
+        now[0] = t
+        try:
+            factory()
+        except ConfigurationError:
+            pass
+    assert calls == [0]                                  # failure cached
+    now[0] = 130
+    assert factory() == "assistant" and factory() == "assistant" and calls == [0, 130]

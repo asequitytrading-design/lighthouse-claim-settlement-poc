@@ -9,6 +9,7 @@ prepares files for a human examiner and never decides coverage, eligibility, fra
 from __future__ import annotations
 
 import logging
+import time
 from functools import lru_cache
 from typing import Any, Callable
 
@@ -27,7 +28,7 @@ Use the tools to get facts; never invent case facts or claims guidance:
 - A question about one claim (a case ID such as CSET-LTD-002): call get_claim_case first.
 - A question about procedures, required documents or the handoff format: call search_guidance.
 - A question across many claims (counts, lists, statuses by product): call ask_portfolio.
-- A request to prepare or draft the examiner handoff for a claim: call draft_handoff.
+- A request to prepare or draft the examiner handoff for a claim: call draft_handoff. If it fails (for example no approved prompt version), build the handoff yourself from get_claim_case and search_guidance with these sections: Case summary, Evidence received, Missing or conflicting items, Suggested next administrative steps, Benefit determination: Not determined. Say that it was prepared without the approved template.
 
 Grounding rules:
 - State only facts that appear in tool results. When you use guidance, quote the exact sentence in double quotes and name its source document in brackets, e.g. "..." [kb-ltd-evidence].
@@ -37,6 +38,11 @@ Boundaries:
 - Never decide or suggest coverage, eligibility, exclusions, diagnosis, causation, fraud, claim validity or benefit amounts. If asked, say that a human examiner decides and offer what you can prepare (missing documents, conflicts, next administrative steps).
 
 Style: concise markdown, short sections or bullet lists, case IDs in bold."""
+
+# Default chat model: qwen3-next (instruct, no reasoning channel) answered every tool-calling probe
+# and never returned an empty reply; gpt-oss-20b (claims-small) occasionally did on follow-ups.
+# Still a catalog *candidate*: approve it in config/model_catalog.yaml before production use.
+DEFAULT_MODEL = "claims-alt-qwen-next"
 
 PRODUCT_SEGMENTS = {"std": "short_term_disability", "ltd": "long_term_disability",
                     "life": "life_insurance", "accident": "accident_insurance",
@@ -83,6 +89,33 @@ class HandoffTool:
         return timed(self.spec.name, call)
 
 
+class CachedFactory:
+    """The approved-prompt assistant, cached (versions are immutable); a failure ("no approved
+    version") is cached for `retry_seconds` so each handoff request does not repeat a slow
+    registry lookup. A promote takes effect within that time or on restart."""
+
+    def __init__(self, load: Callable[[], Any], retry_seconds: float = 120.0, ttl_seconds: float = 600.0,
+                 clock: Callable[[], float] = time.monotonic):
+        self._load, self._retry, self._ttl, self._clock = load, retry_seconds, ttl_seconds, clock
+        self._value: Any = None
+        self._error: Exception | None = None
+        self._until = 0.0
+
+    def __call__(self) -> Any:
+        if self._clock() < self._until:
+            if self._error is not None:
+                raise self._error
+            return self._value
+        try:
+            self._value, self._error = self._load(), None
+            self._until = self._clock() + self._ttl          # re-check @champion periodically
+        except LighthouseError as exc:
+            self._value, self._error = None, exc
+            self._until = self._clock() + self._retry
+            raise
+        return self._value
+
+
 def price_function(profile: Profile) -> Callable[[str, int, int], float | None]:
     """Cost of a turn from the rate card (illustrative rates until contract rates exist)."""
     try:
@@ -112,7 +145,7 @@ def build_copilot(profile: Profile, logger: logging.Logger, tools: dict[str, Too
         return build_chat_model(profile, key, logger)
 
     if assistant_factory is None:
-        def assistant_factory():
+        def load_assistant():
             from ...agent import published_assistant
             from ...prompt_registry import MLflowPromptRegistry
             import mlflow
@@ -120,9 +153,10 @@ def build_copilot(profile: Profile, logger: logging.Logger, tools: dict[str, Too
                 mlflow.set_registry_uri(profile.registry_uri)
             return published_assistant(MLflowPromptRegistry(logger), models("claims-medium"), logger,
                                        profile.prompt_name, __version__)
+        assistant_factory = CachedFactory(load_assistant)
     tools = dict(tools)
     if "get_claim_case" in tools:
         tools["draft_handoff"] = HandoffTool(tools["get_claim_case"], assistant_factory)
-    return Agent(AgentConfig("claims_copilot", SYSTEM_PROMPT, default_model="claims-small"), tools,
+    return Agent(AgentConfig("claims_copilot", SYSTEM_PROMPT, default_model=DEFAULT_MODEL), tools,
                  model_factory or models, logger,
                  guardrails=[NonDecisionGuardrail(), QuoteGuardrail()], price_of=price_function(profile))

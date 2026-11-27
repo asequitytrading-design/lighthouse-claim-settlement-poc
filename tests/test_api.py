@@ -94,7 +94,7 @@ def test_models_list_app_models_with_prices():
     client, _, _ = _client()
     models = {m["key"]: m for m in client.get("/api/models").json()["models"]}
     assert {"claims-small", "claims-medium", "claims-alt-qwen-next", "claims-alt-llama"} <= set(models)
-    assert "claims-judge" not in models and models["claims-small"]["default"]
+    assert "claims-judge" not in models and models["claims-alt-qwen-next"]["default"]
     assert models["claims-small"]["input_usd_per_1m"] == 0.07
 
 

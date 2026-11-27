@@ -175,11 +175,16 @@ class GroundedAnswerer:
                                 activity="explorer")
         text = "\n\n".join(f"[{i}] {h.text}" for i, h in enumerate(passages, 1))
         started = time.perf_counter()
+        messages = [{"role": "system", "content": GROUNDED_SYSTEM},
+                    {"role": "user", "content": f"Question: {question}\n\nPassages:\n{text}"}]
+        tags = event.request_tags() if self._own_events else {"lh_purpose": "grounded_answer"}
         try:
-            result = self._chat.complete_messages(
-                [{"role": "system", "content": GROUNDED_SYSTEM},
-                 {"role": "user", "content": f"Question: {question}\n\nPassages:\n{text}"}],
-                tags=event.request_tags() if self._own_events else {"lh_purpose": "grounded_answer"})
+            try:
+                result = self._chat.complete_messages(messages, tags=tags)
+            except ModelInvocationError as exc:     # reasoning models: an occasional empty reply
+                if exc.category != "empty_response":
+                    raise
+                result = self._chat.complete_messages(messages, tags=tags)
             event.input_tokens, event.output_tokens = result.prompt_tokens, result.completion_tokens
             event.served_model = result.served_model
             return parse_reply(result.text), None

@@ -133,7 +133,7 @@ class AppServices:
 
     # ------------------------------------------------------------ models
     def models(self) -> list[dict]:
-        from ..agents.claims_copilot.agent import price_function
+        from ..agents.claims_copilot.agent import DEFAULT_MODEL, price_function
         from ..platform.model_catalog import load_model_catalog
         price = price_function(self.profile)
         listed = []
@@ -146,7 +146,7 @@ class AppServices:
                            "family": entry.family, "status": entry.status,
                            "input_usd_per_1m": price(entry.key, 1_000_000, 0),
                            "output_usd_per_1m": price(entry.key, 0, 1_000_000),
-                           "default": entry.key == "claims-small"})
+                           "default": entry.key == DEFAULT_MODEL})
         return listed
 
     # ------------------------------------------------------------ usage and evals (Unity Catalog)

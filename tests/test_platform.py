@@ -707,3 +707,19 @@ def test_ground_uses_single_query_report_and_parent_documents():
     assert result.grounding_score == 1.0     # whole document scored by its best chunk (0.8 in the fake)
     engine = _Engine()
     assert explorer.flush_events(NAMES, engine, LOG) >= 2 and answerer.events == []
+
+
+def test_grounding_retries_one_empty_model_reply():
+    from lighthouse_poc.exceptions import ModelInvocationError as _MIE
+    replies = [_MIE("empty", "empty_response"),
+               SimpleNamespace(text='{"answerable": false}', prompt_tokens=1, completion_tokens=1, served_model="m")]
+
+    class _Flaky:
+        def complete_messages(self, messages, tags=None):
+            reply = replies.pop(0)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+    answerer = GroundedAnswerer(load_model_catalog()[0], _Flaky(), LOG)
+    result = answerer.answer("pet insurance", _PASSAGES, _dense())
+    assert result.refusal_reason == "model: passages do not contain the answer"    # retried, not "call failed"
