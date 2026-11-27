@@ -50,6 +50,21 @@ def _client(kind="unity_gateway", fail=False, tracker=None):
                              tracker=tracker), completions
 
 
+@pytest.fixture
+def databricks_auth(monkeypatch):
+    """Stand-in for workspace auth (CI has no Databricks credentials)."""
+    class _FakeAuth(NoAuth):
+        def headers(self):
+            return {"Authorization": "Bearer test-token"}
+    fake = _FakeAuth()
+    import lighthouse_poc.gateway as gateway
+    import lighthouse_poc.scorers as scorers
+    monkeypatch.setattr(gateway, "build_auth", lambda auth: fake)
+    if hasattr(scorers, "build_auth"):
+        monkeypatch.setattr(scorers, "build_auth", lambda auth: fake)
+    return fake
+
+
 def _tags(call):
     return json.loads(call["extra_headers"][REQUEST_TAGS_HEADER])
 
@@ -63,7 +78,7 @@ def test_profile_defaults_tag_every_call_even_without_a_run():
     assert tags["lh_model_key"] == "claims-medium" and tags["lh_event_id"]
 
 
-def test_build_chat_model_carries_profile_defaults():
+def test_build_chat_model_carries_profile_defaults(databricks_auth):
     model = build_chat_model(_profile(), "claims-medium", LOG)
     assert model._tracker.context.use_case_id == "claim_settlement_assistant"
 
@@ -113,7 +128,7 @@ def test_kong_gets_no_tag_header():
     assert REQUEST_TAGS_HEADER not in completions.calls[0]["extra_headers"]
 
 
-def test_judge_calls_carry_the_run_tags():
+def test_judge_calls_carry_the_run_tags(databricks_auth):
     binding = build_judge_binding(_profile(), "claims-judge")
     run = UsageTracker(context_from_profile(_profile(), activity="eval", prompt_version="4"))
     run.update(run_id="r-9")
