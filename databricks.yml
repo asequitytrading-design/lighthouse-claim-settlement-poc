@@ -18,6 +18,15 @@ sync:
   include:
     - apps/lighthouse_demo/web/dist/**          # built UI (gitignored, served by the app)
   exclude:
+    # Local state, also listed here so a copy without .gitignore (zip hand-over) never uploads it
+    - .venv/**
+    - .env
+    - .lighthouse/**
+    - mlruns/**
+    - mlflow.db
+    - "**/__pycache__/**"
+    - "**/*.egg-info/**"
+    - .pytest_cache/**
     - apps/lighthouse_demo/web/node_modules/**
     - apps/lighthouse_demo/web/src/**
     - app/**

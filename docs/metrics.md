@@ -89,5 +89,7 @@ Targets are provisional and need claims-examiner/product-owner review. LLM score
 | Gateway-routed model calls | Marketplace model calls (chat + embeddings) that go through Unity Gateway divided by all marketplace model calls | percent | `model_invocation.model_service` vs `v_gateway_usage` | 100% (ADR-013) | Platform owner |
 | Embedding latency | Wall time per gateway embeddings call | ms | `embedding_request_completed` log, `model_invocation.latency_ms` (purpose embedding_*) | Baseline first run (Free Edition) | Engineer |
 | Vector retrieval hit rate | Verification and golden queries whose expected document is in the top 3 | percent | `platform verify` step 7, `vector_query` | 100% on the synthetic guidance set | Engineer |
+| Workspace deployment success (runbook) | Runbook steps 1-7 (`docs/deployment-runbook.md`) completed without manual code changes on a new workspace, divided by attempts | percent | Deployment checklist ("Check the deployment" table) | 100%; any code change needed is a defect | Engineer |
+| Workspace deployment time | Wall time from unzip to a warmed-up app URL on a new workspace | minutes | Deployer's notes (route A or B) | <= 60 min (first Vector Search endpoint 10-20 min of it) | Engineer |
 
 For each module, feature or bug fix, record KPI change, baseline, target and measurement source in its PR/commit notes. Avoid logging raw narratives, diagnoses, death details, personal identifiers or secrets.

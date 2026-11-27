@@ -1,6 +1,6 @@
 # Lighthouse demo script (Monday 2026-11-30, ~10 minutes)
 
-What Arjun (engagement lead) asked for (planning meeting,
+What the engagement lead asked for (planning meeting,
 2026-11-27): an agent that stitches 2-3 tools through MCP, connects to the Lakehouse (Unity
 Catalog), shows model switching and evaluation results, behind a thin UI, on dummy data. All data
 here is synthetic. Timings are from the dry run on Databricks Apps (2026-11-27).
