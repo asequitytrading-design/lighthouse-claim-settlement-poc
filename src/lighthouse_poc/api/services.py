@@ -45,8 +45,10 @@ class AppServices:
     def __init__(self, profile: Profile, settings: AppSettings, store: SessionStore,
                  logger: logging.Logger, copilot_factory: Callable[[], Any] | None = None,
                  model_factory: Callable[[str], Any] | None = None,
-                 query: Callable[[str], list[dict]] | None = None, host: str | None = None):
+                 query: Callable[[str], list[dict]] | None = None, host: str | None = None,
+                 cache: Any = None):
         self.profile, self.settings, self.store, self.logger = profile, settings, store, logger
+        self.cache = cache
         self._copilot_factory = copilot_factory
         self._copilot = None
         self._model_factory = model_factory
@@ -61,7 +63,7 @@ class AppServices:
         if self._copilot is None:
             if self._copilot_factory is None:
                 from ..agents.claims_copilot.agent import build_copilot
-                self._copilot = build_copilot(self.profile, self.logger)
+                self._copilot = build_copilot(self.profile, self.logger, cache=self.cache)
             else:
                 self._copilot = self._copilot_factory()
         return self._copilot
@@ -253,6 +255,13 @@ class AppServices:
         step("warehouse", lambda: f"{len(self.usage_recent(5))} recent calls")
         return {"steps": steps, "ready": all(s["status"] == "ok" for s in steps.values())}
 
+    # ------------------------------------------------------------ semantic cache (guidance only)
+    def cache_stats(self) -> dict:
+        return self.cache.stats() if self.cache is not None else {"backend": "off"}
+
+    def cache_clear(self) -> dict:
+        return {"cleared": self.cache.clear() if self.cache is not None else 0}
+
     # ------------------------------------------------------------ health
     def health(self) -> dict:
         checks = {"profile": self.profile.name, "session_store": self.store.describe(),
@@ -264,6 +273,7 @@ class AppServices:
         except Exception as exc:
             checks["workspace_auth"] = f"error: {type(exc).__name__}"
         checks["copilot"] = "ready" if self._copilot is not None else "not loaded (loads on first chat)"
+        checks["semantic_cache"] = self.cache.describe() if self.cache is not None else "off"
         return checks
 
 

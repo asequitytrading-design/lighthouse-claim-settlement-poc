@@ -22,6 +22,7 @@ export const api = {
   playground: (models: string[], prompt: string, system?: string) =>
     json<{ results: any[] }>("/api/playground", { method: "POST", body: JSON.stringify({ models, prompt, system: system || null }) }).then((r) => r.results),
   usage: (hours: number) => json<any>(`/api/usage/summary?hours=${hours}`),
+  cache: () => json<{ entries?: number; hits?: number; backend: string }>("/api/cache"),
   recent: (limit = 25) => json<{ calls: any[] }>(`/api/usage/recent?limit=${limit}`).then((r) => r.calls),
   evalRuns: () => json<{ runs: any[] }>("/api/evals/runs").then((r) => r.runs),
   evalRun: (id: string) => json<any>(`/api/evals/runs/${id}`),

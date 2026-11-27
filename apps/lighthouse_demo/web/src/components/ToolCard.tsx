@@ -34,8 +34,9 @@ export default function ToolCard({ step }: { step: Step }) {
           <div className="text-sm font-medium flex items-center gap-2">
             {meta.label}
             <span className={`text-[11px] px-1.5 py-0.5 rounded-md ${chip(step.status)}`}>{running ? "running" : step.status}</span>
+            {d.cache?.hit && <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-accent/10 text-accent" title={`similarity ${d.cache.similarity}`}>cache hit</span>}
           </div>
-          <div className="text-xs text-muted truncate">{running ? meta.running : step.summary} · {meta.via}</div>
+          <div className="text-xs text-muted truncate">{running ? meta.running : String(step.summary ?? "").replace(" · cache hit", "")} · {d.cache?.hit ? "semantic cache" : meta.via}</div>
         </div>
         {running ? <Loader2 size={15} className="animate-spin text-muted" />
                  : <span className="text-xs text-muted">{fmt.ms(step.latency_ms)}</span>}

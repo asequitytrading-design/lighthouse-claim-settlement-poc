@@ -75,12 +75,14 @@ class GuidanceSearchTool:
 
     # floor 0.52: measured 2026-11-27, off-topic questions 0.42-0.52, sample questions 0.53-0.72
     def __init__(self, client: McpHttpClient, embedder: Any, floor: float = 0.52, k: int = 3,
-                 answerer: Any = None):
+                 answerer: Any = None, cache: Any = None, cache_namespace: str = "guidance",
+                 cache_threshold: float = 0.95):
         """answerer: platform.grounding.GroundedAnswerer. When set, the passages must actually
         answer the question (model check + verbatim quotes), else the tool returns no guidance:
         retrieval alone lets look-alikes through (pet insurance scores like a claims question)."""
         self._client, self._embedder, self._floor, self._k = client, embedder, floor, k
         self._answerer = answerer
+        self._cache, self._namespace, self._threshold = cache, cache_namespace, cache_threshold
         self._tool: str | None = None
 
     def run(self, arguments: dict) -> ToolResult:
@@ -89,26 +91,53 @@ class GuidanceSearchTool:
             if not query:
                 return ToolResult(self.spec.name, "error", {"error": "query is required"}, "no query")
             vector = self._embedder.embed([query]).vectors[0]
-            self._tool = self._tool or _discover(self._client, "__document_chunk_index")
-            hits = sorted(json.loads(self._client.call_tool(
-                self._tool, {"query_vector": vector, "num_results": self._k})),
-                key=lambda h: -float(h.get("score", 0)))
-            passages = [{"chunk_id": h["chunk_id"], "doc_id": h["doc_id"], "text": h["text"],
-                         "score": round(float(h["score"]), 3)}
-                        for h in hits if float(h.get("score", 0)) >= self._floor][: self._k]
-            # the server may return more than num_results: keep the best k
-            if not passages:
-                best = max((float(h.get("score", 0)) for h in hits), default=0.0)
-                return ToolResult(self.spec.name, "empty", {"result": NO_GUIDANCE},
-                                  f"no passage above {self._floor} (best {best:.2f})",
-                                  data={"best_score": round(best, 3)})
-            if self._answerer is None:
-                return ToolResult(self.spec.name, "ok", {"passages": passages},
-                                  f"{len(passages)} passages ({', '.join(p['doc_id'] for p in passages)})",
-                                  data={"citations": passages})
-            return self._grounded(query, passages)
+            cached = self._cached(vector)
+            if cached is not None:
+                return cached
+            result = self._search(query, vector)
+            if self._cache is not None and result.status in ("ok", "empty"):
+                try:
+                    self._cache.store(self._namespace, vector, {
+                        "status": result.status, "content": result.content,
+                        "summary": result.summary, "data": result.data})
+                except Exception:          # the cache must never break the answer
+                    pass
+            return result
         return timed(self.spec.name, call)
 
+    def _cached(self, vector: list[float]) -> ToolResult | None:
+        if self._cache is None:
+            return None
+        try:
+            hit = self._cache.lookup(self._namespace, vector, self._threshold)
+        except Exception:
+            return None
+        if hit is None:
+            return None
+        p = hit["payload"]
+        return ToolResult(self.spec.name, p["status"], p["content"], f"{p['summary']} · cache hit",
+                          data={**p.get("data", {}), "cache": {"hit": True,
+                                                              "similarity": round(hit["similarity"], 3)}})
+
+    def _search(self, query: str, vector: list[float]) -> ToolResult:
+        self._tool = self._tool or _discover(self._client, "__document_chunk_index")
+        hits = sorted(json.loads(self._client.call_tool(
+            self._tool, {"query_vector": vector, "num_results": self._k})),
+            key=lambda h: -float(h.get("score", 0)))
+        passages = [{"chunk_id": h["chunk_id"], "doc_id": h["doc_id"], "text": h["text"],
+                     "score": round(float(h["score"]), 3)}
+                    for h in hits if float(h.get("score", 0)) >= self._floor][: self._k]
+        # the server may return more than num_results: keep the best k
+        if not passages:
+            best = max((float(h.get("score", 0)) for h in hits), default=0.0)
+            return ToolResult(self.spec.name, "empty", {"result": NO_GUIDANCE},
+                              f"no passage above {self._floor} (best {best:.2f})",
+                              data={"best_score": round(best, 3)})
+        if self._answerer is None:
+            return ToolResult(self.spec.name, "ok", {"passages": passages},
+                              f"{len(passages)} passages ({', '.join(p['doc_id'] for p in passages)})",
+                              data={"citations": passages})
+        return self._grounded(query, passages)
 
     def _grounded(self, query: str, passages: list[dict]) -> ToolResult:
         from ...platform.retrieval import Hit

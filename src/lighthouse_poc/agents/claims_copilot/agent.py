@@ -134,11 +134,11 @@ def price_function(profile: Profile) -> Callable[[str, int, int], float | None]:
 
 def build_copilot(profile: Profile, logger: logging.Logger, tools: dict[str, Tool] | None = None,
                   model_factory: Callable[[str], Any] | None = None,
-                  assistant_factory: Callable[[], Any] | None = None) -> Agent:
+                  assistant_factory: Callable[[], Any] | None = None, cache: Any = None) -> Agent:
     from ...gateway import build_chat_model
     if tools is None:
         from .tools import build_tools
-        tools = build_tools(profile, logger)
+        tools = build_tools(profile, logger, cache=cache)
 
     @lru_cache(maxsize=8)
     def models(key: str):

@@ -2,7 +2,8 @@
 
   LIGHTHOUSE_PROFILE        config profile (default databricks)
   LIGHTHOUSE_APP_USE_CASE   request tag lh_use_case of the app's model calls (default claims_copilot)
-  LIGHTHOUSE_SESSION_STORE  sqlite | postgres (default sqlite)
+  LIGHTHOUSE_SESSION_STORE  sqlite | postgres | lakebase (default sqlite); the semantic cache
+                            follows it (pgvector for postgres/lakebase, in-memory for sqlite)
   LIGHTHOUSE_SQLITE_PATH    sqlite file (default .lighthouse/sessions.db; on Apps the disk is ephemeral)
   LIGHTHOUSE_PG_DSN         postgres DSN for local Postgres or Lakebase (phase 5)
   LIGHTHOUSE_WEB_DIST       built UI to serve at / (default apps/lighthouse_demo/web/dist)

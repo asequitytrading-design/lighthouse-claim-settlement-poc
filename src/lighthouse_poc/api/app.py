@@ -9,6 +9,7 @@ Routes (all JSON under /api; chat streams Server-Sent Events):
   POST /api/playground                  {models[], prompt, system?} -> one result per model
   GET  /api/usage/summary?hours=&use_case=  per model, per activity, hourly timeline (UC views)
   GET  /api/usage/recent?limit=         latest calls (no prompt or response text)
+  GET  /api/cache | DELETE /api/cache   semantic cache (guidance answers only) stats / clear
   GET  /api/evals/runs | /api/evals/runs/{run_id}   evaluation runs and per-case scores (UC)
 The built UI (apps/lighthouse_demo/web/dist) is served at / when present.
 
@@ -56,12 +57,14 @@ def default_services(settings: AppSettings) -> AppServices:
     for key, value in model_service_env().items():      # UNITY_GATEWAY_*_MODEL from the catalog
         os.environ.setdefault(key, value)
     profile = load_profile(settings.profile)
-    if settings.session_store == "postgres":
-        from ..sessions.postgres import PostgresSessionStore
-        store = PostgresSessionStore(settings.pg_dsn)
+    if settings.session_store in ("postgres", "lakebase"):
+        from ..sessions.postgres import Connector, PgSemanticCache, PostgresSessionStore
+        connector = Connector.from_env(settings.session_store)
+        store, cache = PostgresSessionStore(connector), PgSemanticCache(connector)
     else:
-        store = SqliteSessionStore(settings.sqlite_path)
-    return AppServices(profile, settings, store, logger)
+        from ..sessions.cache import MemorySemanticCache
+        store, cache = SqliteSessionStore(settings.sqlite_path), MemorySemanticCache()
+    return AppServices(profile, settings, store, logger, cache=cache)
 
 
 def create_app(services: AppServices | None = None, settings: AppSettings | None = None) -> FastAPI:
@@ -119,6 +122,14 @@ def create_app(services: AppServices | None = None, settings: AppSettings | None
             return services.usage_summary(hours, use_case)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+
+    @app.get("/api/cache")
+    def cache_stats():
+        return services.cache_stats()
+
+    @app.delete("/api/cache")
+    def cache_clear():
+        return services.cache_clear()
 
     @app.get("/api/usage/recent")
     def usage_recent(limit: int = 50):

@@ -27,7 +27,8 @@ def _answerer(profile: Profile, logger: logging.Logger):
 
 
 def build_tools(profile: Profile, logger: logging.Logger, auth: Any = None, embedder: Any = None,
-                workspace: Any = None, http: Any = None, answerer: Any = None) -> dict[str, Tool]:
+                workspace: Any = None, http: Any = None, answerer: Any = None,
+                cache: Any = None) -> dict[str, Tool]:
     from ...gateway import build_auth
     from ...platform.genie import GenieSpaces, space_title
     from ...platform.runtime import platform_names
@@ -51,7 +52,8 @@ def build_tools(profile: Profile, logger: logging.Logger, auth: Any = None, embe
             host, uc_functions_path(names.catalog, names.claims), auth, logger, http=http)),
         "search_guidance": GuidanceSearchTool(McpHttpClient(
             host, vector_search_path(names.catalog, names.knowledge), auth, logger, http=http), embedder,
-            answerer=answerer if answerer is not None else _answerer(profile, logger)),
+            answerer=answerer if answerer is not None else _answerer(profile, logger),
+            cache=cache, cache_namespace=f"guidance:{names.vector_index}:{platform.embedding_model}"),
     }
     if space_id:
         tools["ask_portfolio"] = PortfolioTool(McpHttpClient(

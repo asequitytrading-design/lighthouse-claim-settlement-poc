@@ -11,13 +11,14 @@ export default function Dashboard() {
   const [hours, setHours] = useState(24);
   const [data, setData] = useState<any>(null);
   const [recent, setRecent] = useState<any[]>([]);
+  const [cache, setCache] = useState<{ entries?: number; hits?: number; backend: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function load() {
     setLoading(true); setError(null);
-    Promise.all([api.usage(hours), api.recent(15)])
-      .then(([u, r]) => { setData(u); setRecent(r); })
+    Promise.all([api.usage(hours), api.recent(15), api.cache().catch(() => null)])
+      .then(([u, r, c]) => { setData(u); setRecent(r); setCache(c); })
       .catch((e) => setError(String(e.message ?? e)))
       .finally(() => setLoading(false));
   }
@@ -56,9 +57,10 @@ export default function Dashboard() {
             </div>
           }>
       {error && <div className="text-sm text-bad mb-4">{error}</div>}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {[["Model calls", fmt.int(totals.calls)], ["Tokens", fmt.int(totals.tokens)], ["Cost (illustrative)", fmt.usd(totals.cost)],
-          ["Error rate", totals.calls ? `${((totals.errors / totals.calls) * 100).toFixed(1)}%` : "–"]].map(([label, value]) => (
+          ["Error rate", totals.calls ? `${((totals.errors / totals.calls) * 100).toFixed(1)}%` : "–"],
+          ["Semantic cache hits", cache?.entries != null ? `${fmt.int(cache.hits)} / ${fmt.int(cache.entries)} entries` : "off"]].map(([label, value]) => (
           <Card key={label} className="p-4"><div className="text-xs text-muted">{label}</div><div className="text-2xl font-semibold mt-1">{value}</div></Card>
         ))}
       </div>
