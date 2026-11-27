@@ -44,7 +44,8 @@ export default function ChatView({ sessionId, models, onSession }: {
     switch (e.type) {
       case "session": currentSession.current = e.session_id; onSession(e.session_id); break;
       case "model_call":
-        update((t) => ({ ...t, thinking: e.status === "started" ? (e.round === 1 ? "Thinking" : "Reading the results") : null }));
+        update((t) => ({ ...t, thinking: e.status === "started" ? (e.round === 1 ? "Thinking" : "Reading the results")
+                                      : e.status === "retry" ? `Retrying (${e.reason === "rate_limit" ? "rate limited" : "empty model reply"})` : null }));
         break;
       case "tool_call": update((t) => ({ ...t, steps: [...(t.steps ?? []), { id: e.id, name: e.name, arguments: e.arguments }] })); break;
       case "tool_result":

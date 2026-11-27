@@ -65,14 +65,20 @@ class TurnContext:
     output_tokens: int = 0
 
 
+# error category -> seconds to wait before the single retry of a model round
+RETRYABLE = {"empty_response": 0.0, "rate_limit": 2.0}
+
+
 class Agent:
     def __init__(self, config: AgentConfig, tools: dict[str, Tool],
                  model_factory: Callable[[str], Any], logger: logging.Logger,
                  guardrails: list[Guardrail] | None = None,
-                 price_of: Callable[[str, int, int], float | None] | None = None):
+                 price_of: Callable[[str, int, int], float | None] | None = None,
+                 sleep: Callable[[float], None] = time.sleep):
         self.config, self.tools, self._models = config, tools, model_factory
         self._logger, self._guardrails = logger, guardrails or []
         self._price_of = price_of or (lambda model, i, o: None)
+        self._sleep = sleep
 
     def run(self, user_message: str, history: list[dict] | None = None,
             model_key: str | None = None) -> Iterator[AgentEvent]:
@@ -88,7 +94,21 @@ class Agent:
             for round_number in range(1, self.config.max_rounds + 2):
                 last = round_number > self.config.max_rounds   # out of rounds: answer without tools
                 yield AgentEvent("model_call", {"round": round_number, "model": model_key, "status": "started"})
-                turn = model.complete_with_tools(messages, [] if last else specs)
+                turn = None
+                for attempt in range(1, 3):
+                    try:
+                        turn = model.complete_with_tools(messages, [] if last else specs)
+                        break
+                    except LighthouseError as exc:
+                        category = getattr(exc, "category", "")
+                        if attempt == 2 or category not in RETRYABLE:
+                            raise
+                        # reasoning models occasionally return an empty message; free-tier rate limits
+                        yield AgentEvent("model_call", {"round": round_number, "model": model_key,
+                                                        "status": "retry", "reason": category})
+                        self._logger.warning("agent_model_retry", extra={
+                            "agent": self.config.name, "model_alias": model_key, "error_category": category})
+                        self._sleep(RETRYABLE[category])
                 ctx.model_calls += 1
                 ctx.input_tokens += turn.prompt_tokens or 0
                 ctx.output_tokens += turn.completion_tokens or 0

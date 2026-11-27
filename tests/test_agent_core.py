@@ -82,10 +82,10 @@ def test_out_of_rounds_forces_an_answer_without_tools_and_unknown_tools_are_erro
 
 
 def test_model_failure_yields_error_then_usage_and_done():
-    agent, _ = _agent([ModelInvocationError("down", "rate_limit")], {})
+    agent, _ = _agent([ModelInvocationError("down", "upstream")], {})
     events = list(agent.run("q"))
     assert [e.type for e in events][-3:] == ["error", "usage", "done"]
-    assert events[-3].data["category"] == "rate_limit"
+    assert events[-3].data["category"] == "upstream"
 
 
 def test_non_decision_guardrail_removes_decision_sentences_only():
@@ -152,3 +152,16 @@ def test_gateway_tool_turn_returns_calls_and_is_tagged():
     turn = client.complete_with_tools([{"role": "user", "content": "q"}], [{"type": "function"}])
     assert turn.tool_calls[0].name == "get_claim_case" and turn.prompt_tokens == 5
     assert calls[0]["tool_choice"] == "auto" and "Databricks-Ai-Gateway-Request-Tags" in calls[0]["extra_headers"]
+
+
+def test_empty_model_replies_and_rate_limits_are_retried_once():
+    agent, _ = _agent([ModelInvocationError("empty", "empty_response"), _turn("answer")], {})
+    agent._sleep = lambda s: None
+    events = list(agent.run("q"))
+    assert any(e.type == "model_call" and e.data.get("status") == "retry" for e in events)
+    assert next(e for e in events if e.type == "answer").data["text"] == "answer"
+    agent, _ = _agent([ModelInvocationError("e", "empty_response"), ModelInvocationError("e", "empty_response")], {})
+    agent._sleep = lambda s: None
+    assert [e.type for e in agent.run("q")][-3:] == ["error", "usage", "done"]       # only one retry
+    agent, _ = _agent([ModelInvocationError("auth", "auth")], {})
+    assert not any(e.data.get("status") == "retry" for e in agent.run("q"))            # not retryable
