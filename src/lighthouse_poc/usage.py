@@ -130,7 +130,7 @@ class UsageTracker:
         explicit = {k: str(v) for k, v in (explicit or {}).items() if v not in (None, "")}
         owned = "lh_event_id" in explicit
         event_id = explicit.get("lh_event_id") or str(uuid.uuid4())
-        context = self.call_context(purpose)
+        context = self.call_context(purpose or explicit.get("lh_purpose"))
         tags = {**context.tags(), "lh_model_key": model_key, "lh_event_id": event_id, **explicit}
         return event_id, context, tags, owned
 

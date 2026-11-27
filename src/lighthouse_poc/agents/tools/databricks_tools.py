@@ -74,8 +74,13 @@ class GuidanceSearchTool:
          "required": ["query"]})
 
     # floor 0.52: measured 2026-11-27, off-topic questions 0.42-0.52, sample questions 0.53-0.72
-    def __init__(self, client: McpHttpClient, embedder: Any, floor: float = 0.52, k: int = 3):
+    def __init__(self, client: McpHttpClient, embedder: Any, floor: float = 0.52, k: int = 3,
+                 answerer: Any = None):
+        """answerer: platform.grounding.GroundedAnswerer. When set, the passages must actually
+        answer the question (model check + verbatim quotes), else the tool returns no guidance:
+        retrieval alone lets look-alikes through (pet insurance scores like a claims question)."""
         self._client, self._embedder, self._floor, self._k = client, embedder, floor, k
+        self._answerer = answerer
         self._tool: str | None = None
 
     def run(self, arguments: dict) -> ToolResult:
@@ -97,10 +102,30 @@ class GuidanceSearchTool:
                 return ToolResult(self.spec.name, "empty", {"result": NO_GUIDANCE},
                                   f"no passage above {self._floor} (best {best:.2f})",
                                   data={"best_score": round(best, 3)})
-            return ToolResult(self.spec.name, "ok", {"passages": passages},
-                              f"{len(passages)} passages ({', '.join(p['doc_id'] for p in passages)})",
-                              data={"citations": passages})
+            if self._answerer is None:
+                return ToolResult(self.spec.name, "ok", {"passages": passages},
+                                  f"{len(passages)} passages ({', '.join(p['doc_id'] for p in passages)})",
+                                  data={"citations": passages})
+            return self._grounded(query, passages)
         return timed(self.spec.name, call)
+
+
+    def _grounded(self, query: str, passages: list[dict]) -> ToolResult:
+        from ...platform.retrieval import Hit
+        # chunk_index 0: each passage is a chunk scored by its own (dense) similarity
+        hits = [Hit(i, p["doc_id"], p["chunk_id"], 0, p["score"], p["text"]) for i, p in enumerate(passages, 1)]
+        grounded = self._answerer.answer(query, hits, hits)
+        if not grounded.grounded:
+            return ToolResult(self.spec.name, "empty", {"result": NO_GUIDANCE},
+                              f"not answered by the guidance ({grounded.refusal_reason})",
+                              data={"grounding_score": 0.0, "refusal_reason": grounded.refusal_reason})
+        cited = [p for p in passages if p["chunk_id"] in grounded.cited_chunks]
+        return ToolResult(self.spec.name, "ok",
+                          {"passages": cited, "verified_quotes": grounded.verified_quotes,
+                           "grounded_summary": grounded.answer},
+                          f"{len(cited)} cited passages, grounding {grounded.grounding_score:.2f}",
+                          data={"citations": cited, "grounding_score": grounded.grounding_score,
+                                "verified_quotes": grounded.verified_quotes})
 
 
 class PortfolioTool:

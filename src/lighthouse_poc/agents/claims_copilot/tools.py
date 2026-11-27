@@ -16,8 +16,18 @@ from ..tools.databricks_tools import ClaimCaseTool, GuidanceSearchTool, Portfoli
 from ..tools.mcp_client import McpHttpClient, genie_path, uc_functions_path, vector_search_path
 
 
+def _answerer(profile: Profile, logger: logging.Logger):
+    """Grounding check for guidance (claims-small through Unity Gateway, tracked by the run)."""
+    from ...gateway import build_chat_model
+    from ...platform.grounding import GroundedAnswerer
+    from ...platform.model_catalog import load_model_catalog
+    entry = {m.key: m for m in load_model_catalog()}["claims-small"]
+    return GroundedAnswerer(entry, build_chat_model(profile, entry.key, logger), logger,
+                            environment=profile.platform.environment, own_events=False)
+
+
 def build_tools(profile: Profile, logger: logging.Logger, auth: Any = None, embedder: Any = None,
-                workspace: Any = None, http: Any = None) -> dict[str, Tool]:
+                workspace: Any = None, http: Any = None, answerer: Any = None) -> dict[str, Tool]:
     from ...gateway import build_auth
     from ...platform.genie import GenieSpaces, space_title
     from ...platform.runtime import platform_names
@@ -40,7 +50,8 @@ def build_tools(profile: Profile, logger: logging.Logger, auth: Any = None, embe
         "get_claim_case": ClaimCaseTool(McpHttpClient(
             host, uc_functions_path(names.catalog, names.claims), auth, logger, http=http)),
         "search_guidance": GuidanceSearchTool(McpHttpClient(
-            host, vector_search_path(names.catalog, names.knowledge), auth, logger, http=http), embedder),
+            host, vector_search_path(names.catalog, names.knowledge), auth, logger, http=http), embedder,
+            answerer=answerer if answerer is not None else _answerer(profile, logger)),
     }
     if space_id:
         tools["ask_portfolio"] = PortfolioTool(McpHttpClient(

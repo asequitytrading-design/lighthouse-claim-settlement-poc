@@ -174,3 +174,25 @@ def test_genie_space_definition_and_lookup_picks_the_oldest_by_title_prefix():
         create_space=lambda **kw: pytest.fail("must not create when one exists")))
     assert GenieSpaces(client, LOG).ensure(NAMES, "wh").space_id == "old"
     assert GenieSpaces(client, LOG).ensure(NAMES, "wh", configured_id="pinned").space_id == "pinned"
+
+
+def test_guidance_search_with_grounding_returns_only_answered_and_cited_passages():
+    from lighthouse_poc.platform.grounding import GroundedAnswer
+    calls = []
+
+    class _Answerer:
+        def __init__(self, grounded):
+            self.grounded = grounded
+
+        def answer(self, question, passages, dense):
+            calls.append([p.chunk_id for p in passages])
+            if not self.grounded:
+                return GroundedAnswer.refused(question, "model: passages do not contain the answer", 0.5)
+            return GroundedAnswer(question, "Request the FCE.", True, 0.8, 0.9,
+                                  cited_chunks=["c1"], verified_quotes=["t1 quote"])
+    ok = GuidanceSearchTool(_vs([0.55, 0.70]), _Embedder(), answerer=_Answerer(True)).run({"query": "fce"})
+    assert ok.status == "ok" and [p["chunk_id"] for p in ok.content["passages"]] == ["c1"]
+    assert ok.data["verified_quotes"] == ["t1 quote"] and calls[-1] == ["c1", "c0"]
+    no = GuidanceSearchTool(_vs([0.60]), _Embedder(), answerer=_Answerer(False)).run({"query": "pet insurance"})
+    assert no.status == "empty" and no.content == {"result": NO_GUIDANCE}
+    assert "do not contain" in no.data["refusal_reason"]

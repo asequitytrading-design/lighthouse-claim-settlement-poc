@@ -34,6 +34,24 @@ class Completion:
     correlation_id: str | None = None
 
 
+@dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: str                       # JSON text as the model produced it
+
+
+@dataclass
+class ToolTurn:
+    """One tool-calling completion: text and/or tool calls (agents, lighthouse_poc.agents)."""
+    text: str
+    tool_calls: list[ToolCall]
+    duration_ms: int
+    served_model: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+
+
 class ChatModel(Protocol):
     """What the assistant needs from any model adapter."""
     def complete(self, system_prompt: str, user_message: str) -> Completion: ...
@@ -243,6 +261,69 @@ class GatewayChatClient:
         finally:
             record.latency_ms = round((time.perf_counter() - started) * 1000)
             tracker.finish(record, owned)
+
+    def complete_with_tools(self, messages: list[dict], tools: list[dict],
+                            tags: Mapping[str, Any] | None = None,
+                            tool_choice: str = "auto") -> ToolTurn:
+        """One tool-calling completion, tagged and recorded like complete_messages."""
+        tracker = active_tracker() or self._tracker
+        event_id, context, call_tags, owned = tracker.begin(self._route.alias, tags)
+        record = CallRecord(event_id, context, self._route.alias, self._request_model, "chat",
+                            trace_id=_current_trace_id())
+        started = time.perf_counter()
+        try:
+            turn = self._tool_turn(messages, tools, tool_choice, call_tags)
+            record.input_tokens, record.output_tokens = turn.prompt_tokens, turn.completion_tokens
+            record.served_model = turn.served_model
+            return turn
+        except ModelInvocationError as exc:
+            record.status, record.error_category = "error", exc.category
+            raise
+        finally:
+            record.latency_ms = round((time.perf_counter() - started) * 1000)
+            tracker.finish(record, owned)
+
+    def _tool_turn(self, messages: list[dict], tools: list[dict], tool_choice: str,
+                   tags: Mapping[str, Any]) -> ToolTurn:
+        correlation_id = _current_trace_id() or str(uuid.uuid4())
+        started = time.perf_counter()
+        log = {"model_alias": self._route.alias, "gateway": self._gateway_kind,
+               "correlation_id": correlation_id}
+        params = dict(self._route.params)
+        standard = {k: params.pop(k) for k in ("temperature", "max_tokens", "top_p") if k in params}
+        try:
+            result = self._client.chat.completions.create(
+                model=self._request_model, messages=messages, tools=tools or None,
+                tool_choice=tool_choice if tools else None,
+                extra_headers={"X-Correlation-ID": correlation_id,
+                               **request_tag_headers(self._gateway_kind, tags)},
+                extra_body=params or None, **standard)
+        except Exception as exc:
+            category = _categorize(exc)
+            self._logger.error("model_request_failed", extra={
+                **log, "error_type": type(exc).__name__, "error_category": category,
+                "duration_ms": round((time.perf_counter() - started) * 1000),
+                "kpi_name": "gateway_request_failed", "kpi_value": 1})
+            raise ModelInvocationError(
+                f"Gateway request failed for model '{self._route.alias}' ({category})",
+                category) from exc
+        elapsed = round((time.perf_counter() - started) * 1000)
+        message = result.choices[0].message if result.choices else None
+        calls = [ToolCall(c.id or f"call_{i}", c.function.name, c.function.arguments or "{}")
+                 for i, c in enumerate(getattr(message, "tool_calls", None) or [])]
+        text = _content_text(getattr(message, "content", None)) if message else ""
+        usage = getattr(result, "usage", None)
+        if not calls and not text.strip():
+            self._logger.error("model_request_empty", extra={**log, "duration_ms": elapsed,
+                                                             "error_category": "empty_response"})
+            raise ModelInvocationError(
+                f"Gateway returned neither text nor tool calls for '{self._route.alias}'",
+                "empty_response")
+        self._logger.info("model_request_completed", extra={
+            **log, "served_model": getattr(result, "model", None), "duration_ms": elapsed,
+            "tool_calls": len(calls), "kpi_name": "model_latency_ms", "kpi_value": elapsed})
+        return ToolTurn(text, calls, elapsed, getattr(result, "model", None),
+                        getattr(usage, "prompt_tokens", None), getattr(usage, "completion_tokens", None))
 
     def _complete(self, messages: list[dict], tags: Mapping[str, Any]) -> Completion:
         correlation_id = _current_trace_id() or str(uuid.uuid4())
