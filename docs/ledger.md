@@ -10,8 +10,8 @@ all merged branches deleted locally and on GitHub. CI: tests on every push/PR; D
 is manual only (`DEPLOY_ON_MAIN` / `RUN_JOB_ON_MAIN` repo variables to re-enable) to save Free
 Edition capacity.
 
-**Current focus: demo for Arjun (Monday, see the planning meeting
-of 2026-11-27).** Thin local UI (Playground, Dashboard, chat agent)
+**Current focus: demo for Arjun, Monday 2026-11-30: ready (docs/demo-script.md). Run
+`python scripts/demo_env.py up --deploy` 30 min before, `down` after.** Thin local UI (Playground, Dashboard, chat agent)
 over an API layer on what exists; agent enriched with Unity Catalog data through MCP; semantic
 cache candidate (Lakebase); prompt registry and eval added to the same UI later. Brainstorm,
 feasibility, then design and implementation plan in `docs/demo-thin-ui.md` before code.
@@ -72,6 +72,15 @@ gemma4-e4b-32k (judge).
   `DATABRICKS_CLIENT_SECRET` (expires 2027-02-23).
 
 ## Progress log
+
+### 2026-11-27 (demo phase 7: rehearsal)
+- Dry run on Apps found hallucinations (handoff from memory; Genie follow-up invented case IDs;
+  boundary answer described another claim). Fixed: CaseFactVerifier (case IDs must come from this
+  turn's tool results; one corrective round, then withheld), follow-up rule, handoff fallback
+  returns real case facts, DecisionQuestionGuardrail (human-examiner sentence first).
+- `docs/demo-script.md` (10 steps, timings, fallbacks), `apps/lighthouse_demo/fallback/*.png`,
+  `demo_env.py up --deploy`; dev target pins genie_space_id, warehouse_id, session_store=lakebase.
+- Monday: `python scripts/demo_env.py up --deploy` 30 min before; `down` after. Everything DOWN now.
 
 ### 2026-11-27 (demo phases 2-5: agent, API, UI, Apps, Lakebase; ADR-019)
 - Agent loop + guardrails + claims copilot (default model claims-alt-qwen-next; gpt-oss returned

@@ -130,7 +130,7 @@ Modern conversational layout (in the style of current chat products):
 | 4 | React UI: chat (streaming, tool cards, citations), playground, dashboard, evals | **done 2026-11-27**: all four pages verified (screenshots, light/dark) |
 | 5 | Session store + semantic cache on local Postgres; Lakebase start/stop; try it once | **done 2026-11-27**: Lakebase sessions + pgvector cache on Apps (1.8 s cached turn), restart-safe; `scripts/demo_env.py` |
 | 6 | Agent Bricks attempt (Knowledge Assistant on the guidance docs) + side-by-side panel | works, or documented as unavailable |
-| 7 | Rehearsal: demo script, recorded fallback, rate-limit plan, README | dry run under 10 minutes |
+| 7 | Rehearsal: demo script, recorded fallback, rate-limit plan, README | **done 2026-11-27**: `docs/demo-script.md`, fallback screenshots, dry run on Apps (all steps <= 13 s), `demo_env.py up --deploy` verified |
 
 Must = phases 1-4 and 7; Should = 5 and the Evals page; Later = 6 if time, prompt registry/eval
 actions in the UI, hosting on Databricks Apps.

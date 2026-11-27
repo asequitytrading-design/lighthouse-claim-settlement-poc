@@ -2,6 +2,7 @@
 
   python scripts/demo_env.py status      app and Lakebase state, app URL
   python scripts/demo_env.py up          start Lakebase, start the app, warm it up
+  python scripts/demo_env.py up --deploy also deploy the current code (bundle deploy + run)
   python scripts/demo_env.py down        stop the app, stop Lakebase
 
 Uses your Databricks CLI profile (DATABRICKS_CONFIG_PROFILE, default lighthouse). The app must be
@@ -68,14 +69,23 @@ def warmup(w, url: str) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("action", choices=["status", "up", "down"])
-    action = parser.parse_args().action
+    parser.add_argument("--deploy", action="store_true", help="with up: deploy the current code first")
+    parser.add_argument("--target", default="dev", help="bundle target (default dev)")
+    args = parser.parse_args()
+    action = args.action
     w = client()
     if action == "up":
         print(f"starting Lakebase {INSTANCE} ...")
         set_lakebase(w, stopped=False)
         wait(lambda: not status(w)["lakebase_disabled"], "Lakebase")
-        print(f"starting app {APP} ...")
-        w.apps.start(APP)
+        if args.deploy:                  # bundle run deploys the code snapshot and starts the app
+            import subprocess
+            print(f"deploying the bundle ({args.target}) and the app code ...")
+            subprocess.run(["databricks", "bundle", "deploy", "-t", args.target], check=True)
+            subprocess.run(["databricks", "bundle", "run", "lighthouse_demo", "-t", args.target], check=True)
+        else:
+            print(f"starting app {APP} ...")
+            w.apps.start(APP)
         wait(lambda: status(w)["app_state"] == "RUNNING", "the app")
         result = warmup(w, status(w)["url"])
         print("warm-up:", "ready" if result["ready"] else "NOT ready",

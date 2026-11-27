@@ -72,6 +72,10 @@ targets:
     default: true
     variables:
       platform_prefix: dev_${workspace.current_user.short_name}_
+      # demo app (workspace-specific, from `lighthouse platform genie ensure` and the SQL warehouse list)
+      genie_space_id: 01f1ea5c41ad185297cb5103da28d66a
+      warehouse_id: 1d67978c88034dbd
+      session_store: lakebase
 
   # Deployment used by GitHub Actions. Files live in the deploying identity's home folder
   # (service principal lighthouse-ci), not /Workspace/Shared, which every user can write.

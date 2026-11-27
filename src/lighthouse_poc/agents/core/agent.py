@@ -48,6 +48,14 @@ class AgentConfig:
     default_model: str = "claims-small"
 
 
+class Verifier(Protocol):
+    """Checks a draft answer before guardrails; a returned message sends the draft back to the
+    model once (e.g. "these case IDs are not in any tool result: use the tools")."""
+    name: str
+
+    def review(self, answer: str, user_message: str, context: "TurnContext") -> str | None: ...
+
+
 class Guardrail(Protocol):
     name: str
 
@@ -63,7 +71,11 @@ class TurnContext:
     model_calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    user_message: str = ""
 
+
+UNVERIFIED_ANSWER = ("I could not verify those case details with the tools, so I will not state them. "
+                     "Ask me to look up the claim and I will fetch its file.")
 
 # error category -> seconds to wait before the single retry of a model round
 RETRYABLE = {"empty_response": 0.0, "rate_limit": 2.0}
@@ -74,24 +86,26 @@ class Agent:
                  model_factory: Callable[[str], Any], logger: logging.Logger,
                  guardrails: list[Guardrail] | None = None,
                  price_of: Callable[[str, int, int], float | None] | None = None,
-                 sleep: Callable[[float], None] = time.sleep):
+                 sleep: Callable[[float], None] = time.sleep, verifiers: list[Verifier] | None = None):
         self.config, self.tools, self._models = config, tools, model_factory
         self._logger, self._guardrails = logger, guardrails or []
         self._price_of = price_of or (lambda model, i, o: None)
         self._sleep = sleep
+        self._verifiers = verifiers or []
 
     def run(self, user_message: str, history: list[dict] | None = None,
             model_key: str | None = None) -> Iterator[AgentEvent]:
         model_key = model_key or self.config.default_model
         started = time.perf_counter()
-        ctx = TurnContext()
+        ctx = TurnContext(user_message=user_message)
         messages = [{"role": "system", "content": self.config.system_prompt},
                     *(history or []), {"role": "user", "content": user_message}]
         specs = [tool.spec.openai() for tool in self.tools.values()]
         try:
             model = self._models(model_key)
             answer = None
-            for round_number in range(1, self.config.max_rounds + 2):
+            sent_back = False
+            for round_number in range(1, self.config.max_rounds + 3):
                 last = round_number > self.config.max_rounds   # out of rounds: answer without tools
                 yield AgentEvent("model_call", {"round": round_number, "model": model_key, "status": "started"})
                 turn = None
@@ -118,6 +132,20 @@ class Agent:
                     "input_tokens": turn.prompt_tokens, "output_tokens": turn.completion_tokens})
                 if not turn.tool_calls:
                     answer = turn.text.strip()
+                    feedback = next((f for v in self._verifiers
+                                     if (f := v.review(answer, user_message, ctx))), None)
+                    if feedback and sent_back:      # still unverified after one correction: withhold
+                        yield AgentEvent("guardrail", {"name": "fact_check",
+                                                       "note": f"answer withheld: {feedback}"})
+                        answer = UNVERIFIED_ANSWER
+                        break
+                    if feedback:                    # one corrective round
+                        sent_back = True
+                        yield AgentEvent("guardrail", {"name": "fact_check", "note": f"draft sent back: {feedback}"})
+                        messages += [{"role": "assistant", "content": answer},
+                                     {"role": "user", "content": f"Check before answering: {feedback}"}]
+                        answer = None
+                        continue
                     break
                 messages.append({"role": "assistant", "content": turn.text or None, "tool_calls": [
                     {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.arguments}}

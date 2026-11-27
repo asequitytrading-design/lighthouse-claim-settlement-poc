@@ -117,7 +117,8 @@ def test_handoff_tool_fails_closed_without_an_approved_prompt():
     def no_champion():
         raise ConfigurationError("No approved version: alias @champion is not set.")
     result = HandoffTool(case, no_champion).run({"case_id": "CSET-LTD-002"})
-    assert result.status == "error" and "@champion" in result.summary
+    assert result.status == "ok" and "@champion" in result.summary and result.data["fallback"]
+    assert result.content["case"]["product_line"] == "ltd"          # real facts, not memory
 
     seen = {}
     assistant = SimpleNamespace(_prompt_version="5", predict=lambda *a: seen.update(args=a) or {
@@ -187,3 +188,53 @@ def test_cached_factory_caches_values_and_failures_for_a_while():
     assert calls == [0]                                  # failure cached
     now[0] = 130
     assert factory() == "assistant" and factory() == "assistant" and calls == [0, 130]
+
+
+
+def test_answers_naming_cases_no_tool_returned_are_sent_back_once():
+    from lighthouse_poc.agents.core.guardrails import CaseFactVerifier
+    portfolio = _Tool("ask_portfolio", ToolResult("ask_portfolio", "ok", {"answer": "x", "rows": [["CSET-LTD-026"]]}, "1 row"))
+    agent, model = _agent([_turn("Broker claims: CSET-LTD-017 and CSET-LTD-033."),          # from memory
+                           _turn(calls=[("ask_portfolio", {"question": "broker"})]),
+                           _turn("Broker claim: CSET-LTD-026.")], {"ask_portfolio": portfolio})
+    agent._verifiers = [CaseFactVerifier()]
+    events = list(agent.run("Which of those came in through the broker channel?"))
+    notes = [e.data["note"] for e in events if e.type == "guardrail"]
+    assert notes and "CSET-LTD-017" in notes[0] and "sent back" in notes[0]
+    assert next(e for e in events if e.type == "answer").data["text"] == "Broker claim: CSET-LTD-026."
+    assert portfolio.calls == [{"question": "broker"}]
+
+
+def test_case_ids_from_the_question_or_tools_pass_the_fact_check():
+    from lighthouse_poc.agents.core.guardrails import CaseFactVerifier
+    ctx = TurnContext(tool_results=[ToolResult("get_claim_case", "ok", {"case_id": "CSET-LTD-002"}, "")])
+    assert CaseFactVerifier().review("CSET-LTD-002 is missing two documents.", "Prepare CSET-LTD-002", ctx) is None
+    # named in the question but never looked up: the description would come from memory
+    assert "CSET-LIFE-003" in CaseFactVerifier().review("CSET-LIFE-003 is an LTD claim.", "Is CSET-LIFE-003 fraudulent?", TurnContext())
+    assert "CSET-ACC-004" in CaseFactVerifier().review("Also CSET-ACC-004.", "q", ctx)
+    assert CaseFactVerifier().review("No case mentioned.", "q", TurnContext()) is None
+
+
+def test_answers_still_unverified_after_correction_are_withheld():
+    from lighthouse_poc.agents.core.agent import UNVERIFIED_ANSWER
+    from lighthouse_poc.agents.core.guardrails import CaseFactVerifier
+    agent, _ = _agent([_turn("CSET-LIFE-003 is an LTD claim."), _turn("CSET-LIFE-003 is still an LTD claim.")], {})
+    agent._verifiers = [CaseFactVerifier()]
+    events = list(agent.run("Is CSET-LIFE-003 fraudulent?"))
+    assert next(e for e in events if e.type == "answer").data["text"] == UNVERIFIED_ANSWER
+    assert any("withheld" in e.data.get("note", "") for e in events if e.type == "guardrail")
+
+
+
+def test_decision_questions_always_state_that_a_human_examiner_decides():
+    from lighthouse_poc.agents.core.guardrails import DecisionQuestionGuardrail
+    guard = DecisionQuestionGuardrail()
+    text, note = guard.check("Case summary: life claim.", TurnContext(user_message="Is CSET-LIFE-003 fraudulent? Should we deny it?"))
+    assert text.startswith(HUMAN_DECIDES) and note
+    same, note = guard.check("A human claims examiner decides. Case summary...", TurnContext(user_message="Should we deny it?"))
+    assert note is None and same.startswith("A human")
+    same, note = guard.check("Two documents are missing.", TurnContext(user_message="Which documents are missing?"))
+    assert note is None
+    buried = "Case summary: " + "facts. " * 60 + "A human claims examiner decides."
+    text, note = guard.check(buried, TurnContext(user_message="Should we deny it?"))
+    assert text.startswith(HUMAN_DECIDES) and note                    # buried mention is not enough

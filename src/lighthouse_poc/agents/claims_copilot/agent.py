@@ -17,7 +17,8 @@ from ... import __version__
 from ...config import Profile
 from ...exceptions import LighthouseError
 from ..core.agent import Agent, AgentConfig
-from ..core.guardrails import NonDecisionGuardrail, QuoteGuardrail
+from ..core.guardrails import (CaseFactVerifier, DecisionQuestionGuardrail, NonDecisionGuardrail,
+                               QuoteGuardrail)
 from ..core.tools import Tool, ToolResult, ToolSpec, timed
 
 NO_INFORMATION = "I do not have this information in the knowledge base."
@@ -28,14 +29,15 @@ Use the tools to get facts; never invent case facts or claims guidance:
 - A question about one claim (a case ID such as CSET-LTD-002): call get_claim_case first.
 - A question about procedures, required documents or the handoff format: call search_guidance.
 - A question across many claims (counts, lists, statuses by product): call ask_portfolio.
-- A request to prepare or draft the examiner handoff for a claim: call draft_handoff. If it fails (for example no approved prompt version), build the handoff yourself from get_claim_case and search_guidance with these sections: Case summary, Evidence received, Missing or conflicting items, Suggested next administrative steps, Benefit determination: Not determined. Say that it was prepared without the approved template.
+- A request to prepare or draft the examiner handoff for a claim: call draft_handoff. If it returns case facts instead of a handoff (no approved template), write the handoff from those facts only, with these sections: Case summary, Evidence received, Missing or conflicting items, Suggested next administrative steps, Benefit determination: Not determined. Say that it was prepared without the approved template.
+- Follow-up questions ("which of those...", "and by region?") about claims data: call the tool again with the complete question including the earlier filters. Earlier answers in this conversation are not data: never list case IDs, counts or dates from memory.
 
 Grounding rules:
-- State only facts that appear in tool results. When you use guidance, quote the exact sentence in double quotes and name its source document in brackets, e.g. "..." [kb-ltd-evidence].
+- State only facts that appear in tool results of this turn (product line, dates, documents, counts, case IDs). When you use guidance, quote the exact sentence in double quotes and name its source document in brackets, e.g. "..." [kb-ltd-evidence].
 - If search_guidance returns no guidance, or the passages are about a different product or topic than the question, answer exactly: "{NO_INFORMATION}" Do not answer from general knowledge.
 
 Boundaries:
-- Never decide or suggest coverage, eligibility, exclusions, diagnosis, causation, fraud, claim validity or benefit amounts. If asked, say that a human examiner decides and offer what you can prepare (missing documents, conflicts, next administrative steps).
+- Never decide or suggest coverage, eligibility, exclusions, diagnosis, causation, fraud, claim validity or benefit amounts. If asked to, start your answer with a sentence like: "I don't make fraud or claim decisions; a human claims examiner does." Then offer what you can prepare (missing documents, conflicts, next administrative steps), using tool results only.
 
 Style: concise markdown, short sections or bullet lists, case IDs in bold."""
 
@@ -71,10 +73,16 @@ class HandoffTool:
             facts = case.content
             try:
                 assistant = self._assistant_factory()
-            except LighthouseError as exc:          # no approved prompt: fail closed, say why
-                return ToolResult(self.spec.name, "error", {"error": str(exc)},
-                                  "no approved prompt version (@champion)",
-                                  error_category=getattr(exc, "category", "configuration"))
+            except LighthouseError:     # no approved prompt: the governed draft fails closed,
+                return ToolResult(      # the model gets the facts to write a manual handoff
+                    self.spec.name, "ok",
+                    {"approved_template": "unavailable: no approved prompt version (@champion)",
+                     "case": facts,
+                     "instruction": "Write the handoff from these case facts only: Case summary, "
+                                    "Evidence received, Missing or conflicting items, Suggested next "
+                                    "administrative steps, Benefit determination: Not determined."},
+                    "no approved prompt (@champion): case facts returned for a manual handoff",
+                    data={"fallback": True, "case_id": facts.get("case_id")})
             documents = [d["document_type"] for d in facts.get("documents", []) if d.get("status") == "received"]
             missing = [d["document_type"] for d in facts.get("documents", []) if d.get("status") != "received"]
             narrative = f"{facts.get('case_summary', '')} Documents not received or conflicting: {', '.join(missing) or 'none'}."
@@ -159,4 +167,6 @@ def build_copilot(profile: Profile, logger: logging.Logger, tools: dict[str, Too
         tools["draft_handoff"] = HandoffTool(tools["get_claim_case"], assistant_factory)
     return Agent(AgentConfig("claims_copilot", SYSTEM_PROMPT, default_model=DEFAULT_MODEL), tools,
                  model_factory or models, logger,
-                 guardrails=[NonDecisionGuardrail(), QuoteGuardrail()], price_of=price_function(profile))
+                 guardrails=[NonDecisionGuardrail(), DecisionQuestionGuardrail(), QuoteGuardrail()],
+                 price_of=price_function(profile),
+                 verifiers=[CaseFactVerifier()])

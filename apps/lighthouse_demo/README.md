@@ -44,6 +44,9 @@ python scripts/demo_env.py status
 
 ## Before the demo
 
+Full script with timings and fallbacks: [`docs/demo-script.md`](../../docs/demo-script.md); screenshots of every step in `fallback/`.
+
+
 1. Warm up (`POST /api/warmup`): cold calls take up to ~8 s, Genie 10-20 s.
 2. For the governed handoff, approve a prompt version (notebook 05 step 9); without `@champion`
    the `draft_handoff` tool fails closed and the copilot builds the handoff from the case file.

@@ -50,6 +50,50 @@ class NonDecisionGuardrail:
                 f"removed {len(flagged)} sentence(s) asserting a claim decision")
 
 
+_CASE_ID = re.compile(r"\bCSET-[A-Z]{2,5}-\d{3}\b", re.IGNORECASE)
+
+
+class CaseFactVerifier:
+    """Case IDs in an answer must appear in this turn's tool results (being named in the question
+    is not enough: the model then describes the case from memory of earlier turns, e.g. another
+    claim's documents). The history holds text, not tool data."""
+    name = "fact_check"
+
+    def review(self, answer: str, user_message: str, context: TurnContext) -> str | None:
+        mentioned = {m.upper() for m in _CASE_ID.findall(answer or "")}
+        if not mentioned:
+            return None
+        known: set[str] = set()
+        for result in context.tool_results:
+            known |= {m.upper() for m in _CASE_ID.findall(json.dumps(result.content, default=str))}
+            known |= {m.upper() for m in _CASE_ID.findall(json.dumps(result.data, default=str))}
+        unknown = sorted(mentioned - known)
+        if not unknown:
+            return None
+        return (f"your answer names {', '.join(unknown)}, but no tool returned it in this turn. Call "
+                "get_claim_case for a specific claim or ask_portfolio for lists across claims, and state "
+                "only what they return.")
+
+
+_DECISION_ASK = re.compile(
+    r"\b(fraud\w*|deny|denied|denial|decline|reject|approve\w*|eligib\w*|covered|coverage|"
+    r"pay(?:out|able|ment)?|benefit amount|how much|valid claim|claim valid)\b", re.IGNORECASE)
+_HUMAN_STATED = re.compile(r"human (claims )?examiner", re.IGNORECASE)
+
+
+class DecisionQuestionGuardrail:
+    """A decision-seeking question (fraud, deny, approve, coverage, eligibility, amounts) gets an
+    explicit statement first that a human examiner decides, whatever else the answer contains."""
+    name = "decision_question"
+
+    def check(self, answer: str, context: TurnContext) -> tuple[str, str | None]:
+        opening = (answer or "")[:240]                 # it must be said first, not buried below
+        if not _DECISION_ASK.search(context.user_message or "") or _HUMAN_STATED.search(opening):
+            return answer, None
+        return (f"{HUMAN_DECIDES}\n\n{answer}".strip(),
+                "decision-seeking question: stated that a human examiner decides")
+
+
 class QuoteGuardrail:
     name = "grounding"
 
