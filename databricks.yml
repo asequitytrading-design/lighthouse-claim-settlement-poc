@@ -35,6 +35,12 @@ variables:
   warehouse_id:
     description: SQL warehouse the demo app queries (usage, evals, Genie).
     default: ""
+  session_store:
+    description: Demo app sessions + semantic cache. sqlite (testing; app disk is ephemeral) or lakebase (demo; start the instance first).
+    default: sqlite
+  lakebase_instance:
+    description: Lakebase database instance bound to the demo app (create with scripts/lakebase.py).
+    default: lighthouse-demo
   catalog:
     description: Unity Catalog catalog for the schema that holds prompts (Free Edition usually `workspace`).
     default: workspace

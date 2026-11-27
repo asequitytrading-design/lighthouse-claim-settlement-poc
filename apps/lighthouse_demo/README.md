@@ -30,6 +30,18 @@ Prerequisites: `.venv` with `pip install -e '.[platform,app]'`, Node 20+, Databr
 See `src/lighthouse_poc/api/settings.py`: `LIGHTHOUSE_SESSION_STORE` (`sqlite` | `postgres`),
 `LIGHTHOUSE_SQLITE_PATH`, `LIGHTHOUSE_PG_DSN`, `LIGHTHOUSE_APP_USE_CASE`, `LIGHTHOUSE_DASHBOARD_URL`.
 
+## On Databricks (Databricks Apps + Lakebase)
+
+```bash
+# once: deploy the app (Lakebase sessions + cache) and grant its identity access
+databricks bundle deploy -t dev --var genie_space_id=<space> --var warehouse_id=<wh> --var session_store=lakebase
+lighthouse --profile databricks platform app grants --prefix dev_<you>_ --principal <app SP id> --prompt-schema dev_<you>_lighthouse
+
+python scripts/demo_env.py up       # enable Lakebase, start the app, warm it up (prints the URL)
+python scripts/demo_env.py down     # stop the app and disable the Lakebase compute (Free Edition)
+python scripts/demo_env.py status
+```
+
 ## Before the demo
 
 1. Warm up (`POST /api/warmup`): cold calls take up to ~8 s, Genie 10-20 s.

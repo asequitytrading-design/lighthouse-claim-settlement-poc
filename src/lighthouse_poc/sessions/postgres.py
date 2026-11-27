@@ -31,7 +31,6 @@ CREATE INDEX IF NOT EXISTS chat_message_session ON chat_message(session_id, id);
 """
 
 CACHE_SCHEMA = """
-CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS semantic_cache (
     id TEXT PRIMARY KEY, namespace TEXT NOT NULL, embedding vector({dim}) NOT NULL,
     payload JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -44,10 +43,16 @@ class Connector:
     """psycopg connections from a DSN, or to Lakebase with a refreshed OAuth token."""
 
     def __init__(self, dsn: str | None = None, lakebase: dict | None = None,
-                 token_provider: Callable[[], str] | None = None):
+                 token_provider: Callable[[], str] | None = None, schema: str = "lighthouse_app"):
+        """schema: the app's own Postgres schema (an app identity may not create in public);
+        the pgvector type is found through search_path (extension installed in public)."""
         if not dsn and not lakebase:
             raise ConfigurationError("Postgres store needs LIGHTHOUSE_PG_DSN or a Lakebase database")
+        if not schema.replace("_", "").isalnum():
+            raise ConfigurationError(f"Invalid Postgres schema {schema!r}")
         self._dsn, self._lakebase, self._token_provider = dsn, lakebase, token_provider
+        self.schema = schema
+        self._schema_ready = False
         self._token: tuple[str, float] | None = None
         self._lock = threading.Lock()
 
@@ -83,6 +88,10 @@ class Connector:
             connection = psycopg.connect(**cfg, password=self._password(), sslmode="require",
                                          autocommit=True)
         try:
+            if not self._schema_ready:
+                connection.execute(f"CREATE SCHEMA IF NOT EXISTS {self.schema}")
+                self._schema_ready = True
+            connection.execute(f"SET search_path TO {self.schema}, public")
             yield connection
         finally:
             connection.close()
@@ -159,6 +168,10 @@ class PgSemanticCache:
     def __init__(self, connector: Connector, dim: int = 1024, ttl_hours: int = 24):
         self._connector, self._ttl = connector, ttl_hours
         with connector.connect() as connection:
+            has_vector = connection.execute(
+                "SELECT 1 FROM pg_extension WHERE extname = 'vector'").fetchone()
+            if not has_vector:   # needs owner rights: on Lakebase the instance owner creates it once
+                connection.execute("CREATE EXTENSION IF NOT EXISTS vector")
             connection.execute(CACHE_SCHEMA.format(dim=int(dim)))
 
     def describe(self) -> str:

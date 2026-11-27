@@ -265,6 +265,7 @@ class AppServices:
     # ------------------------------------------------------------ health
     def health(self) -> dict:
         checks = {"profile": self.profile.name, "session_store": self.store.describe(),
+                  "store_setting": self.settings.session_store,
                   "use_case": self.settings.use_case}
         try:
             from ..gateway import build_auth

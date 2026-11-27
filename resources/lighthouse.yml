@@ -32,7 +32,8 @@ resources:
           - {name: LIGHTHOUSE_PLATFORM_PREFIX, value: "${var.platform_prefix}"}
           - {name: LIGHTHOUSE_ENVIRONMENT, value: "${bundle.target}"}
           - {name: LIGHTHOUSE_APP_USE_CASE, value: claims_copilot}
-          - {name: LIGHTHOUSE_SESSION_STORE, value: sqlite}
+          - {name: LIGHTHOUSE_SESSION_STORE, value: "${var.session_store}"}
+          - {name: LIGHTHOUSE_LAKEBASE_INSTANCE, value: "${var.lakebase_instance}"}
           - {name: LIGHTHOUSE_SQLITE_PATH, value: /tmp/lighthouse/sessions.db}
           - {name: LIGHTHOUSE_GENIE_SPACE_ID, value: "${var.genie_space_id}"}
           - {name: DATABRICKS_WAREHOUSE_ID, value_from: sql-warehouse}
@@ -42,6 +43,10 @@ resources:
           sql_warehouse: {id: "${var.warehouse_id}", permission: CAN_USE}
         - name: genie-space
           genie_space: {name: lighthouse-claims, space_id: "${var.genie_space_id}", permission: CAN_RUN}
+        # Lakebase (sessions + pgvector cache); sets PGHOST, PGDATABASE, PGUSER, PGPORT for the app
+        - name: lakebase
+          database: {instance_name: "${var.lakebase_instance}", database_name: databricks_postgres,
+                     permission: CAN_CONNECT_AND_CREATE}
 
   jobs:
     lighthouse_prompt_eval:

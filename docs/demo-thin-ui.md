@@ -128,7 +128,7 @@ Modern conversational layout (in the style of current chat products):
 | 2 | `AgentService` (loop, streaming events, guardrails, usage tags) + tests with fake tools | **done 2026-11-27**: 6 demo questions live (incl. fraud, pet insurance, off-topic refusals) |
 | 3 | FastAPI app: chat SSE, models, playground, usage, evals, health; tests with fakes | **done 2026-11-27**: all endpoints live locally (port 8787) + `/api/warmup` |
 | 4 | React UI: chat (streaming, tool cards, citations), playground, dashboard, evals | **done 2026-11-27**: all four pages verified (screenshots, light/dark) |
-| 5 | Session store + semantic cache on local Postgres; Lakebase start/stop; try it once | cache hit shown; Lakebase started/stopped |
+| 5 | Session store + semantic cache on local Postgres; Lakebase start/stop; try it once | **done 2026-11-27**: Lakebase sessions + pgvector cache on Apps (1.8 s cached turn), restart-safe; `scripts/demo_env.py` |
 | 6 | Agent Bricks attempt (Knowledge Assistant on the guidance docs) + side-by-side panel | works, or documented as unavailable |
 | 7 | Rehearsal: demo script, recorded fallback, rate-limit plan, README | dry run under 10 minutes |
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from dataclasses import replace
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -57,12 +58,20 @@ def default_services(settings: AppSettings) -> AppServices:
     for key, value in model_service_env().items():      # UNITY_GATEWAY_*_MODEL from the catalog
         os.environ.setdefault(key, value)
     profile = load_profile(settings.profile)
+    from ..sessions.cache import MemorySemanticCache
+    store = cache = None
     if settings.session_store in ("postgres", "lakebase"):
         from ..sessions.postgres import Connector, PgSemanticCache, PostgresSessionStore
-        connector = Connector.from_env(settings.session_store)
-        store, cache = PostgresSessionStore(connector), PgSemanticCache(connector)
-    else:
-        from ..sessions.cache import MemorySemanticCache
+        try:
+            connector = Connector.from_env(settings.session_store)
+            store, cache = PostgresSessionStore(connector), PgSemanticCache(connector)
+        except Exception as exc:          # e.g. Lakebase stopped: keep the demo up on SQLite
+            logger.error("session_store_fallback", exc_info=True, extra={
+                "store": settings.session_store, "error_type": type(exc).__name__,
+                "error_category": "session_store"})
+            settings = replace(settings, session_store=f"sqlite (fallback: {settings.session_store} "
+                                                       f"unavailable, {type(exc).__name__})")
+    if store is None:
         store, cache = SqliteSessionStore(settings.sqlite_path), MemorySemanticCache()
     return AppServices(profile, settings, store, logger, cache=cache)
 

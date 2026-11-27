@@ -132,3 +132,12 @@ def test_warmup_reports_each_step_without_failing():
     client, _, _ = _client()
     result = client.post("/api/warmup").json()
     assert result["steps"]["copilot"]["status"] == "ok" and "warehouse" in result["steps"]
+
+
+def test_unreachable_postgres_store_falls_back_to_sqlite(monkeypatch):
+    from lighthouse_poc.api.app import default_services
+    monkeypatch.setenv("DATABRICKS_HOST", "https://h")
+    monkeypatch.delenv("LIGHTHOUSE_PG_DSN", raising=False)
+    services = default_services(AppSettings(session_store="postgres", sqlite_path=":memory:"))
+    assert services.store.describe() == "sqlite::memory:"
+    assert services.settings.session_store.startswith("sqlite (fallback: postgres unavailable")

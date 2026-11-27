@@ -73,6 +73,15 @@ gemma4-e4b-32k (judge).
 
 ## Progress log
 
+### 2026-11-27 (demo phases 2-5: agent, API, UI, Apps, Lakebase; ADR-019)
+- Agent loop + guardrails + claims copilot (default model claims-alt-qwen-next; gpt-oss returned
+  empty replies on follow-ups -> one retry); FastAPI (SSE chat, playground, usage, evals, cache,
+  warm-up); React UI (copilot, playground, dashboard, evaluations).
+- Databricks App `lighthouse-demo-dev` (SP 5d9285db-..., grants applied), Lakebase project
+  `lighthouse-demo` (CU_1, pgvector 0.8.7, app schema lighthouse_app). Both DOWN after testing
+  (`scripts/demo_env.py down`; Lakebase endpoint disabled). `up` path not yet exercised end to end.
+- Local: docker compose demo-pg (5434). 322 tests offline.
+
 ### 2026-11-27 (demo phase 1: claims data and MCP tools; ADR-018)
 - Revision 0005 applied to dev: `dev_asequitytrading_ai_claims` (claim_case 40, claim_document 160,
   `get_claim_case`). Genie space "Lighthouse claims (dev_asequitytrading)"
