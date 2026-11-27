@@ -46,19 +46,35 @@ def test_job_parameter_defaults_name_real_profile_models():
 def test_env_overrides_cover_every_profile_variable():
     profile_text = (ROOT / "config" / "profiles" / "databricks.yaml").read_text()
     profile_vars = set(re.findall(r"\$\{([A-Z_]+)", profile_text))
+    required = set(re.findall(r"\$\{([A-Z_]+)\}", profile_text))   # no ":-default"
     passed = {pair.split("=", 1)[0] for pair in env_args(TASKS["evaluate"])}
-    # Everything the profile reads must be supplied by the job; DATABRICKS_HOST is resolved
+    # Every variable without a default must be supplied by the job; DATABRICKS_HOST is resolved
     # at runtime from databricks-sdk auth, GIT_COMMIT is extra lineage for the script.
-    assert profile_vars - {"DATABRICKS_HOST"} <= passed, profile_vars - passed
+    # Defaulted platform variables (ADR-012) are not used by the eval job.
+    assert required - {"DATABRICKS_HOST"} <= passed, required - passed
     assert "DATABRICKS_HOST" not in passed  # ${workspace.host} is empty with CLI-profile auth
     assert passed - profile_vars <= {"GIT_COMMIT"}
     assert not any(k in passed for k in ("DATABRICKS_TOKEN", "KONG_API_KEY"))  # no secrets
 
 
-def test_evaluate_consumes_registered_prompt_version():
+def test_evaluate_scores_registered_version_against_champion():
     params = TASKS["evaluate"]["spark_python_task"]["parameters"]
-    assert params[params.index("--prompt-version") + 1] == (
-        "{{tasks.register_prompt.values.prompt_version}}")
+    assert TASKS["evaluate"]["spark_python_task"]["python_file"].endswith("scripts/lighthouse.py")
+    command = params[params.index("eval"):]
+    assert command[command.index("--prompt") + 1] == "{{tasks.register_prompt.values.prompt_version}}"
+    assert command[command.index("--baseline") + 1] == "@champion"
+    assert "--baseline-optional" in command                  # first deploy: no champion yet
+    assert command[command.index("--scorer-mode") + 1] == "{{job.parameters.scorer_mode}}"
+    # Global options (profile, --env) come before the subcommand.
+    assert params.index("--profile") < params.index("eval")
+    assert max(i for i, p in enumerate(params) if p == "--env") < params.index("eval")
+    from lighthouse_poc.cli import build_parser
+    # Substitute what Databricks fills in: job parameter defaults and the task value.
+    values = {f"{{{{job.parameters.{p['name']}}}}}": p["default"] for p in JOB["parameters"]}
+    values["{{tasks.register_prompt.values.prompt_version}}"] = "3"
+    args = build_parser().parse_args([values.get(p, p) for p in params])
+    assert args.scorer_mode == "deterministic" and args.model == "mock" and args.prompt == "3"
+    assert args.command == "eval" and args.profile == "databricks" and args.baseline_optional
     register = TASKS["register_prompt"]["spark_python_task"]["parameters"]
     assert register[register.index("--task-value-key") + 1] == "prompt_version"
     assert "--if-changed" in register
@@ -148,6 +164,22 @@ def test_latest_follows_pagination(prompt_api):
     api = prompt_api(FakePromptApi(templates={1: "a", 7: "b"}, pages=pages))
     assert MLflowPromptRegistry(LOGGER).latest("c.s.p").version == 7
     assert api.searched == [None, "t2"]
+
+
+def test_versions_newest_first_and_empty_when_missing(prompt_api):
+    prompt_api(FakePromptApi(templates={2: "b", 10: "c", 1: "a"}))
+    assert [v.version for v in MLflowPromptRegistry(LOGGER).versions("c.s.p")] == ["10", "2", "1"]
+    prompt_api(FakePromptApi(templates={}))
+    assert MLflowPromptRegistry(LOGGER).versions("c.s.p") == []
+
+
+def test_load_alias_errors_are_typed(monkeypatch):
+    def missing(name_or_uri):
+        assert name_or_uri == "prompts:/c.s.p@champion"
+        raise RuntimeError("NOT_FOUND")
+    monkeypatch.setattr("mlflow.genai.load_prompt", missing)
+    with pytest.raises(PromptRegistryError, match="@champion"):
+        MLflowPromptRegistry(LOGGER).load_alias("c.s.p", "champion")
 
 
 def test_registry_lookup_errors_are_not_treated_as_missing(prompt_api):

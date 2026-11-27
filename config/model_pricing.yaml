@@ -1,0 +1,45 @@
+# AI Marketplace rate card: price per 1 million tokens for each model in config/model_catalog.yaml.
+# `lighthouse platform models sync` (or notebooks 02/04) mirrors it into
+# <catalog>.<prefix>ai_marketplace.model_price; the cost views (v_model_call_cost,
+# v_model_cost_daily) multiply gateway token counts by the price in force on the call's date.
+#
+# IMPORTANT: the rates below are ILLUSTRATIVE placeholders (price_source: illustrative) so the
+# cost dashboard has numbers to show. They are not a Databricks quote, and Free Edition is not
+# billed per token. Replace them with your contract rates (price_source: contract) before using
+# cost figures for any decision.
+#
+# Price changes: never edit an old row. Add a row with a new effective_from date; calls before
+# that date keep the old price, calls on or after it use the new one.
+currency: USD
+rates:
+  - model_key: claims-small
+    effective_from: "2026-01-01"
+    input_per_1m_tokens: 0.07
+    output_per_1m_tokens: 0.30
+    price_source: illustrative
+  - model_key: claims-medium
+    effective_from: "2026-01-01"
+    input_per_1m_tokens: 0.50
+    output_per_1m_tokens: 2.00
+    price_source: illustrative
+  - model_key: claims-judge
+    effective_from: "2026-01-01"
+    input_per_1m_tokens: 0.15
+    output_per_1m_tokens: 0.60
+    price_source: illustrative
+  - model_key: claims-alt-qwen-next
+    effective_from: "2026-01-01"
+    input_per_1m_tokens: 0.15
+    output_per_1m_tokens: 1.20
+    price_source: illustrative
+  - model_key: claims-alt-llama
+    effective_from: "2026-01-01"
+    input_per_1m_tokens: 0.50
+    output_per_1m_tokens: 1.50
+    price_source: illustrative
+  - model_key: embed-default
+    effective_from: "2026-01-01"
+    input_per_1m_tokens: 0.02
+    output_per_1m_tokens: 0.00
+    price_source: illustrative
+    notes: Embeddings have input tokens only.

@@ -2,6 +2,11 @@
 # MAGIC %md
 # MAGIC # Lighthouse prompt registry and synthetic claim settlement evaluation
 # MAGIC Synthetic records only. Select an approved Unity Gateway model service in this workspace.
+# MAGIC
+# MAGIC > **Superseded by `05_prompt_experiments_guide`**, which runs the same flow through the
+# MAGIC > application's own commands (`lighthouse try / eval / promote`) with hard gates, rubric and
+# MAGIC > judges. This notebook is kept for reference; its model calls are tagged and recorded as
+# MAGIC > activity `notebook` (ADR-013).
 
 # COMMAND ----------
 import json, logging, os, sys
@@ -15,8 +20,10 @@ from lighthouse_poc.config import load_profile
 from lighthouse_poc.gateway import build_chat_model
 from lighthouse_poc.evaluation import MLflowEvaluationService
 from lighthouse_poc.prompt_registry import MLflowPromptRegistry
+from lighthouse_poc.prompts import PromptResolver
 from lighthouse_poc.logging_config import configure_logging
 from lighthouse_poc.scorers import build_scorers
+from lighthouse_poc.platform.usage_recorder import tracked_run
 
 logger=configure_logging()
 dbutils.widgets.text("prompt_name","main.default.claim_settlement_review")
@@ -24,9 +31,11 @@ dbutils.widgets.text("model_alias","claims-medium")
 dbutils.widgets.dropdown("judge_alias","claims-judge",["claims-judge","databricks-managed-judge"])
 dbutils.widgets.text("experiment_name","/Shared/lighthouse-claim-settlement-poc")
 dbutils.widgets.text("application_version","0.1.0")
-dbutils.widgets.text("prompt_version","1")
+dbutils.widgets.text("prompt_version","@champion")  # <version> | @<alias> | latest
 dbutils.widgets.text("register_new_prompt","false")
 name=dbutils.widgets.get("prompt_name").strip()
+from databricks.sdk import WorkspaceClient
+os.environ.setdefault("DATABRICKS_HOST", WorkspaceClient().config.host)
 profile=load_profile("databricks")
 model_service=dbutils.widgets.get("model_alias").strip()
 mlflow.set_experiment(dbutils.widgets.get("experiment_name").strip())
@@ -34,7 +43,8 @@ registry=MLflowPromptRegistry(logger)
 
 # COMMAND ----------
 # To create a version, set register_new_prompt=true and supply a change note below.
-# Otherwise the evaluation loads the explicitly selected version and will not create a new one.
+# Otherwise the evaluation loads the selected reference (default @champion, the approved
+# version) and will not create a new one.
 if dbutils.widgets.get("register_new_prompt").strip().lower()=="true":
     template=(PROJECT/"prompts"/"claim_settlement_v1.txt").read_text(encoding="utf-8")
     prompt=registry.register(name,template,"Synthetic claim settlement preparation prompt",
@@ -42,14 +52,16 @@ if dbutils.widgets.get("register_new_prompt").strip().lower()=="true":
     prompt_version=prompt.version
 else:
     prompt_version=dbutils.widgets.get("prompt_version").strip()
-print({"prompt_name":name,"prompt_version":prompt_version})
+resolved=PromptResolver(registry,name).resolve(str(prompt_version))
+prompt_version=resolved.label
+print({"prompt_name":name,"prompt_reference":resolved.reference,"prompt_version":prompt_version})
 
 # COMMAND ----------
 with (PROJECT/"data"/"golden_eval_dataset.jsonl").open(encoding="utf-8") as f:
     records=[json.loads(line) for line in f if line.strip()]
 model=build_chat_model(profile,model_service,logger)
 assistant=ClaimSettlementAssistant(registry,model,logger,name,prompt_version,
-                      dbutils.widgets.get("application_version"))
+                      dbutils.widgets.get("application_version"),prompt=resolved)
 def predict_fn(case_id:str,product_segment:str,claim_narrative:str,
                submitted_documents:list,policy_or_benefit_context:str):
     return assistant.predict(case_id,product_segment,claim_narrative,submitted_documents,
@@ -58,7 +70,11 @@ scorers,judge,scorer_manifest=build_scorers(profile,"llm-judges",dbutils.widgets
 manifest={"application_version":dbutils.widgets.get("application_version"),
           "prompt_name":name,"prompt_version":prompt_version,"model_service":model_service,
           "dataset_version":"1.1.0",**scorer_manifest}
-with judge.activated():
+# tagged + recorded: every app call (model_invocation) and the judge calls (gateway request tags)
+with tracked_run(profile,logger,"notebook",prompt_name=name,prompt_version=prompt_version) as tracker, \
+        judge.activated(), mlflow.start_run(run_name=f"notebook01-{model_service}-p{prompt_version}") as run:
+    tracker.update(run_id=run.info.run_id)
+    scorers=scorers[:-len(judge.scorers())]+judge.scorers(tracker.judge_tags(judge.alias))
     result=MLflowEvaluationService(logger).run(records,predict_fn,scorers,manifest)
 display(result.tables)
 print("Review all cases and traces. This notebook never auto-publishes a prompt alias.")

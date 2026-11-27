@@ -20,7 +20,7 @@ from mlflow.genai.scorers import Correctness, ExpectationsGuidelines, Safety, sc
 from .agent import ClaimSettlementAssistant
 from .config import ModelRoute, Profile, require, scoped_environment
 from .exceptions import ConfigurationError
-from .gateway import build_auth
+from .gateway import build_auth, request_tag_headers
 
 DETERMINISTIC_SCORER_VERSION = "deterministic-v2"
 JUDGE_SCORER_VERSION = "correctness-safety-guidelines-v1"
@@ -67,22 +67,26 @@ class JudgeBinding:
     environment: Mapping[str, str] = field(default_factory=dict)
     extra_headers: Mapping[str, str] = field(default_factory=dict, repr=False)
     inference_params: Mapping[str, object] = field(default_factory=dict)
+    gateway_kind: str = ""
 
     def describe(self) -> dict[str, str]:
         """Log-safe lineage (no credentials)."""
         return {"judge_model": self.alias, "judge_model_uri": self.model_uri,
                 "judge_base_url": self.environment.get("OPENAI_API_BASE", "n/a")}
 
-    def scorer_options(self) -> dict:
+    def scorer_options(self, request_tags: Mapping[str, str] | None = None) -> dict:
+        """Judge options; `request_tags` attribute the judge calls in Unity Gateway usage
+        (Databricks-Ai-Gateway-Request-Tags header, non-secret identifiers only)."""
         options: dict = {"model": self.model_uri}
-        if self.extra_headers:
-            options["extra_headers"] = dict(self.extra_headers)
+        headers = {**self.extra_headers, **request_tag_headers(self.gateway_kind, request_tags)}
+        if headers:
+            options["extra_headers"] = headers
         if self.inference_params:
             options["inference_params"] = dict(self.inference_params)
         return options
 
-    def scorers(self) -> list:
-        options = self.scorer_options()
+    def scorers(self, request_tags: Mapping[str, str] | None = None) -> list:
+        options = self.scorer_options(request_tags)
         return [Correctness(**options), Safety(**options), ExpectationsGuidelines(**options)]
 
     def activated(self) -> ContextManager[None]:
@@ -121,6 +125,7 @@ def build_judge_binding(profile: Profile, alias: str | None = None) -> JudgeBind
         environment={"OPENAI_API_BASE": profile.base_url_for(route), "OPENAI_API_KEY": api_key},
         extra_headers=headers,
         inference_params=dict(route.params),
+        gateway_kind=profile.gateway.kind,
     )
 
 

@@ -7,6 +7,7 @@ import mlflow
 
 from .exceptions import OutputValidationError
 from .gateway import ChatModel, Completion
+from .usage import case_scope
 
 _FENCE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL | re.IGNORECASE)
 
@@ -35,11 +36,15 @@ class ClaimSettlementAssistant:
                    "inconsistencies", "recommended_examiner_actions", "risk_flags")
 
     def __init__(self, registry, model: ChatModel, logger: logging.Logger,
-                 prompt_name: str, prompt_version: str, app_version: str):
+                 prompt_name: str, prompt_version: str, app_version: str, prompt=None):
+        """``prompt`` is an already resolved prompt (e.g. a draft file or an alias target).
+
+        When given, ``prompt_version`` should be its label so logs name the exact text.
+        """
         self._registry, self._model, self._logger = registry, model, logger
         self._prompt_name, self._prompt_version, self._app_version = (
             prompt_name, prompt_version, app_version)
-        self._prompt = None
+        self._prompt = prompt
 
     def _system_prompt(self) -> str:
         if self._prompt is None:  # versions are immutable, so one load per assistant
@@ -52,7 +57,10 @@ class ClaimSettlementAssistant:
         user = (f"Case ID: {case_id}\nSegment: {product_segment}\n"
                 f"Narrative: {claim_narrative}\nDocuments listed as received: "
                 f"{submitted_documents}\nContext: {policy_or_benefit_context}\nReturn JSON only.")
-        completion: Completion = self._model.complete(self._system_prompt(), user)
+        # usage attribution: the case and prompt version tag this call (lighthouse_poc.usage)
+        with case_scope(case_id=case_id, prompt_name=self._prompt_name,
+                        prompt_version=self._prompt_version, app_version=self._app_version):
+            completion: Completion = self._model.complete(self._system_prompt(), user)
         context = {"case_id": case_id, "prompt_name": self._prompt_name,
                    "prompt_version": self._prompt_version,
                    "application_version": self._app_version,
@@ -82,3 +90,33 @@ class ClaimSettlementAssistant:
         self._logger.info("claim_summary_validated", extra={
             **context, "kpi_name": "output_schema_valid", "kpi_value": 1})
         return output
+
+
+PUBLISHED_ALIAS = "champion"
+
+
+def load_published_prompt(registry, prompt_name: str, alias: str = PUBLISHED_ALIAS):
+    """The approved prompt version the agent serves: ``<name>@champion``.
+
+    Fails closed: when no version has been approved (alias unset) the agent does not fall
+    back to ``latest`` or a fixed number, because that would serve an unreviewed prompt.
+    """
+    from .exceptions import ConfigurationError, PromptRegistryError
+    from .prompts import PromptResolver
+    try:
+        return PromptResolver(registry, prompt_name).resolve(f"@{alias}")
+    except PromptRegistryError as exc:
+        raise ConfigurationError(
+            f"No approved version of {prompt_name}: alias @{alias} is not set. Evaluate a "
+            "version with `lighthouse eval` and approve it with `lighthouse promote`.") from exc
+
+
+def published_assistant(registry, model: ChatModel, logger: logging.Logger, prompt_name: str,
+                        app_version: str, alias: str = PUBLISHED_ALIAS) -> "ClaimSettlementAssistant":
+    """ClaimSettlementAssistant bound to the published (approved) prompt version."""
+    prompt = load_published_prompt(registry, prompt_name, alias)
+    logger.info("published_prompt_loaded", extra={"prompt_name": prompt_name,
+                                                  "prompt_version": prompt.label})
+    return ClaimSettlementAssistant(registry, model, logger, prompt_name, prompt.label,
+                                    app_version, prompt=prompt)
+

@@ -9,8 +9,25 @@ services:
       --host 0.0.0.0
       --port 5000
       --backend-store-uri sqlite:////mlflow-data/mlflow.db
-      --default-artifact-root /mlflow-artifacts
+      --artifacts-destination /mlflow-artifacts
       --workers 2
+    environment:
+      # UI AI Gateway (Gateway, Playground, Judges pages): API keys stored in MLflow are
+      # encrypted with this passphrase; endpoints may target Kong on the compose network
+      # (private IP, plain http: the traffic never leaves the Docker network).
+      MLFLOW_CRYPTO_KEK_PASSPHRASE: ${MLFLOW_CRYPTO_KEK_PASSPHRASE:?set MLFLOW_CRYPTO_KEK_PASSPHRASE in .env}
+      MLFLOW_GATEWAY_API_BASE_ALLOW_PRIVATE_IPS: "true"
+      MLFLOW_GATEWAY_API_BASE_ALLOWED_SCHEMES: "http,https"
+      # Lets the Judges page register and run our custom code judges (gates/rubric). The
+      # server executes registered scorer code: acceptable only because this stack is
+      # local (127.0.0.1) and runs our own synthetic-data scorers. Never on a shared server.
+      MLFLOW_SERVER_ENABLE_CUSTOM_SCORERS: "true"
+      # UI "Run judges" jobs run in this server. Defaults (10 items x 10 scorers in
+      # parallel) queue every LLM judge on the single local Ollama model, and calls
+      # past the 300 s scorer timeout fail. One call at a time matches what a local
+      # Ollama model can serve; raise these for a hosted judge model.
+      MLFLOW_GENAI_EVAL_MAX_WORKERS: "1"
+      MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS: "1"
     ports:
       - "127.0.0.1:5000:5000"
     volumes:
@@ -66,6 +83,11 @@ services:
       KONG_NGINX_WORKER_PROCESSES: "2"
       # pre-function (kong/kong.yaml) runs sandboxed; allow only the JSON codec it needs.
       KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES: cjson.safe
+      # ai-proxy and the pre-function shims read the request body from memory. With
+      # nginx's 8k default, larger bodies spill to a temp file and ai-proxy answers
+      # 400 "request body doesn't contain valid prompts" (MLflow issue detection sends
+      # ~20 KB trace-bearing judge prompts). Keep chat bodies fully in memory.
+      KONG_NGINX_PROXY_CLIENT_BODY_BUFFER_SIZE: 10m
     ports:
       # Host ports 81xx avoid clashes with common local dev servers on 8000-8002.
       - "127.0.0.1:8100:8000"   # proxy (the AI gateway endpoint)

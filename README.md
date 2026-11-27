@@ -2,6 +2,8 @@
 
 A Python-first starter for prompt versioning and evaluation for a synthetic life and health claim settlement preparation assistant. It spans short-term disability, long-term disability, life, accident, critical illness, and dental claims. The assistant organizes evidence for a human examiner; it does not determine coverage, eligibility, diagnosis, or benefit amounts.
 
+Progress, environment state and open actions: [docs/ledger.md](docs/ledger.md).
+
 ## Two ways to demonstrate
 
 - **Local development:** run the open-source MLflow server with Docker Compose and use its actual MLflow UI at `http://localhost:5000`. This supports local prompt/evaluation development with a SQL-backed tracking store. Unity Catalog integrations and Unity Gateway are Databricks workspace capabilities, not part of the local container.
@@ -25,6 +27,14 @@ python -m pytest
 ```
 
 Environment differences live in `config/profiles/{local,databricks}.yaml`; code uses logical model names (`claims-small`, `claims-medium`, `claims-judge`, `mock`) and the gateway picks the physical model. See [docs/local-development.md](docs/local-development.md) and [docs/decisions.md](docs/decisions.md). The mock validates plumbing only, not model quality. Never expose the local stack or place real claim data in it.
+
+## Developer workflow
+
+`lighthouse prompt list | show | diff` and `lighthouse try` let developers inspect versions, edit a draft prompt and try it on a golden case with any profile model, locally or on Databricks, without registering a version per edit: [docs/developer-workflow.md](docs/developer-workflow.md).
+
+## MLflow UI (no code)
+
+Register the Kong models as MLflow AI Gateway endpoints, author a prompt in the Playground, version it and judge its traces in the UI, using the sample use case in `samples/claim_intake_triage/` (11 synthetic positive and negative cases): [docs/mlflow-ui-guide.md](docs/mlflow-ui-guide.md).
 
 ## Databricks deployment
 

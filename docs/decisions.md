@@ -81,9 +81,11 @@ alternates between app and judge models.
 - The MLflow registry URI is a profile setting (`databricks-uc` on Databricks).
 - Job parameters default to `app_model=mock, scorer_mode=deterministic` so the first run needs
   no model access; judges default to the Databricks-managed judge until Unity Gateway is set up.
-- Targets: `dev` (development mode, per-user prefixes) and `ci` (shared root path) for GitHub
-  Actions. CI prefers GitHub OIDC workload identity federation and falls back to a token
-  secret; actions are pinned to commit SHAs.
+- Targets: `dev` (development mode, per-user prefixes) and `ci` (the deploying identity's home
+  folder; `/Workspace/Shared` fails `validate --strict` because every user can write there) for
+  GitHub Actions. CI authenticates as service principal `lighthouse-ci` with OAuth M2M on Free
+  Edition (no account admin, so no OIDC federation policy), uses GitHub OIDC when only the client
+  ID is set, and falls back to a token secret; actions are pinned to commit SHAs.
 
 **Open questions to verify in a real workspace.** Unity Gateway availability on Free Edition and
 whether it exposes chat completions (the quickstart shows the Responses API); service principal
@@ -116,3 +118,289 @@ lineage params, linked prompt version and 6 traces. Fixes found by the first dep
   judges, no judge errors, no Authorization/Bearer strings in traces.
 - CI exports `BUNDLE_VAR_*` only when the GitHub variable is set, so empty variables keep the
   bundle defaults.
+- First CI deploy from `main` (2026-11-25): authenticated as `lighthouse-ci`, deployed target
+  `ci`, registered `workspace.lighthouse.claim_settlement_review` version 1 and ran the mock
+  evaluation (`TERMINATED SUCCESS`).
+
+## ADR-006: Developer CLI with prompt references and content-addressed drafts (2026-11-25)
+
+**Context.** The job runs a fixed prompt version and model. Developers need to inspect
+versions, edit a prompt, try it on a case and compare it, locally and on Databricks, without
+creating a registry version for every edit.
+
+**Decision.**
+- A `lighthouse` console script (`src/lighthouse_poc/cli.py`) is the developer entry point;
+  scripts stay as job entry points. Commands share the profile, registry and assistant code
+  with the job.
+- One prompt reference syntax everywhere: `<version>`, `@<alias>`, `latest`, `file:<path>`
+  (`src/lighthouse_poc/prompts.py`). Ambiguous input (e.g. `v3`, bare `champion`) is rejected.
+- Drafts are unregistered and labelled `draft-<sha256[:8]>` of their text; the label is the
+  prompt version in logs and trace tags. Only registered versions can be approved.
+- `try` runs one golden case as its own trace (`lighthouse.kind=try`) and applies the
+  deterministic gates; it is a smoke test, not review evidence.
+- Interactive output is concise; `-v` adds the structured JSON logs. Errors are typed and
+  exit with code 2; gate failures exit with 1.
+- Planned: `eval` with `--baseline` (step 2), then `promote` that records the approval on the
+  prompt version and run before moving `@champion`, with the assistant and job loading
+  `@champion` (step 3).
+
+**Consequences.** Unity Catalog returns protobuf timestamps for prompt versions where the MLflow
+server returns epoch milliseconds; the CLI handles both. Reading another identity's schema
+(e.g. the CI schema) needs an explicit grant.
+
+## ADR-007: MLflow UI AI Gateway endpoints call Kong (2026-11-25)
+
+**Context.** The MLflow 3.18 UI (Playground, judges, automatic evaluation) only lists models
+registered as MLflow AI Gateway endpoints. Developers and reviewers want to author prompts and
+judge traces in the UI with the same local models the code uses.
+
+**Decision.**
+- UI endpoints are OpenAI-provider endpoints whose base URL is a Kong route
+  (`http://kong:8000/ai/<logical-model>`) and whose model name is the model Kong pins for that
+  route. Kong remains the authenticating, routing gateway; MLflow's gateway is a client of it.
+- Kong's pre-function maps `Authorization: Bearer` (the only credential the MLflow gateway
+  sends) to `apikey` before key-auth and strips it from the upstream request. It also defaults
+  `reasoning_effort` to `none` when the caller does not set it.
+- The MLflow server encrypts stored API keys with `MLFLOW_CRYPTO_KEK_PASSPHRASE` from `.env`,
+  and allows private, plain-http upstream base URLs, because the traffic stays on the Docker
+  network.
+- Endpoints enable usage tracking into the experiment being worked on, so UI trials become
+  traces that UI judges can score.
+- MLflow artifacts are proxied by the server (`--artifacts-destination`).
+
+**Consequences.** Verified: gateway → Kong → Ollama answers in about 1.6 s; usage tracking
+writes `gateway/<endpoint>` → `provider/...` traces without the Kong key. The 3.18 UI cannot run
+a prompt version over a dataset, so batch evaluation stays in code (`lighthouse eval`, planned).
+The Kong key is stored in MLflow (encrypted) in addition to `.env`.
+
+## ADR-008: Review score = hard gates + weighted rubric + LLM judges (2026-11-25)
+
+**Context.** Reviewers need one comparable number per prompt version and model, without
+letting an LLM judge override deterministic safety checks or approve a release.
+
+**Decision.**
+- An evaluation spec per use case (`config/evals/<name>.yaml`) declares the adapter, the
+  dataset, the hard gates, the weighted rubric, the judges and the scoring weights. The spec
+  digest is logged as `scorer_version`.
+- Hard gates are deterministic and blocking: a failed gate makes the case score 0 and the run
+  BLOCKED. Rubric criteria are deterministic and weighted (0..1, partial credit for expected
+  fields). Judges are MLflow built-ins (Guidelines, ExpectationsGuidelines, Safety,
+  Correctness) on the profile judge model; yes = 1, no = 0; errors are excluded and counted.
+- Combined per case = rubric_weight × rubric + judge_weight × judges (default 0.6 / 0.4);
+  rubric only when no judge produced a verdict. The run's mean combined score is compared with
+  `pass_threshold` (default 0.8): BLOCKED, NEEDS WORK or READY FOR HUMAN REVIEW.
+- Every criterion is an MLflow scorer (`gate_*`, `rubric_*`, `judge_*`) with a rationale, and
+  the combined score is logged on each trace as a CODE assessment, so the UI shows the whole
+  basis of the score.
+- The verdict is review evidence only. Approval stays a separate human step (`promote`, step 3).
+
+**Consequences.** Weights and thresholds are per spec and must be agreed with the claims SME;
+the defaults are a starting point. Judge rationales are model-generated and are reviewed, not
+trusted. A spec change produces a new `scorer_version`, so runs scored by different specs are
+not compared as equals.
+
+## ADR-009: Review gate with an evidence-bound approval record (2026-11-25)
+
+**Context.** The design requires that only an approved prompt reference reaches the agent,
+and that each decision is bound to exact versions and run evidence. An alias alone does not
+record why it moved.
+
+**Decision.**
+- `lighthouse promote` approves or rejects one registered version based on one `lighthouse eval`
+  run. Approval needs: a registered version, a finished eval run of the same name and version,
+  verdict READY FOR HUMAN REVIEW, 100% hard gates, and an unchanged spec digest. Rejection only
+  needs the run to match the version.
+- The record (`approvals/<record_id>.json`) is an artifact on the evaluation run, so every
+  decision is kept next to its evidence. `lighthouse_approval_*` tags on the run and the prompt
+  version hold the latest decision for listing. On approval, the alias moves last; the previous
+  target is recorded for rollback.
+- Reviewer and rationale are mandatory free text; the local OS user is recorded as
+  `recorded_by`. There is no identity verification in the POC.
+
+**Consequences.** Verified locally and on Unity Catalog. Unity Catalog differences that were
+found and handled: prompt tag keys cannot contain dots, and versions are returned without
+aliases (resolved through `load_alias`). Write order means a failed alias move leaves a record
+that names the intended alias; re-running promote completes it. Open: binding the reviewer to an
+authenticated identity (Databricks user or service principal) and separating the author from
+the approver.
+
+## ADR-010: Consumers load @champion and fail closed; the job evaluates against it (2026-11-25)
+
+**Context.** Approval only matters if consumers use the approved version. The job still
+evaluated a fixed, just-registered version.
+
+**Decision.**
+- The agent serves `<prompt>@champion` (`published_assistant`). Without an approved version it
+  raises a `ConfigurationError`; there is no fallback to `latest` or a fixed number, because
+  that would serve an unreviewed prompt.
+- `lighthouse try` and the notebook default to `@champion`; scripts accept references.
+- The job keeps testing what Git changed, while also checking the published version. The job's
+  `evaluate` task runs `lighthouse eval` on the registered version with `--baseline @champion
+  --baseline-optional`: the champion is re-scored on every run (regression after gateway or
+  model changes), and the candidate's run is the evidence `lighthouse promote` needs. With no
+  champion yet, or when the champion is that same version, the baseline is skipped with a
+  notice. A BLOCKED candidate fails the task.
+
+**Consequences.** The first approval on each environment is a manual `promote` (by design). The
+job's runtime roughly doubles once a champion exists and differs from the candidate.
+
+## ADR-011: Seeded UI demo state and UI-runnable code judges (local) (2026-11-26)
+
+**Decision.** `scripts/seed_ui_demo.py` idempotently creates the local UI state: gateway
+endpoints for the Kong routes, with app endpoints tracking into `/lighthouse-ui-sample`;
+`claim_intake_triage` v1 and v2 with `@candidate`; prompt-experiment links; the golden dataset;
+and registered judges. Custom code judges (`src/lighthouse_poc/ui_judges.py`) mirror the
+triage spec's gates and rubric so reviewers can run them on any trace from the Judges page.
+They are self-contained because MLflow stores and re-creates only the function body, and they
+accept dict, JSON-string and chat-completion outputs. LLM judges use `gateway:/kong-claims-judge`.
+
+**Consequences.** `MLFLOW_SERVER_ENABLE_CUSTOM_SCORERS=true` is set on the local server only:
+it executes registered code. The UI judge copies duplicate the spec criteria; tests check that
+they agree on fixtures, and `lighthouse eval` remains the scoring of record. The seed never sets
+`@champion`.
+
+
+## ADR-012: AI Marketplace data platform on Unity Catalog with Alembic migrations (2026-11-27)
+
+**Decision.** The AI Marketplace stores what it produces in Unity Catalog, in three schemas per
+environment: `ai_marketplace` (model catalog, use cases, release decisions, migration audit),
+`ai_observability` (model invocations, evaluation summaries, vector queries, dashboard views)
+and `ai_knowledge` (documents, embedded chunks, vector index). A schema prefix (`dev_<user>_`)
+separates personal dev schemas inside the Free Edition `workspace` catalog. Structure changes
+are **Alembic revisions** run on a SQL warehouse through `databricks-sqlalchemy`
+(`lighthouse platform db …`, `src/lighthouse_poc/platform/alembic`). Revisions use placeholder
+names per environment, re-runnable statements (Delta DDL is not transactional), and carry
+their own data migration (e.g. `0002`: add a column, backfill it). Before every upgrade or
+downgrade the runner records each table's Delta version (`schema_migration_audit`) so data
+can be restored with `RESTORE TABLE`. Reference data is not migrated: the model list is YAML
+in Git, synced as a type-2 history (`lighthouse platform models sync`). Tables use column mapping,
+change data feed and liquid clustering. Design: `docs/ai-marketplace-platform.md`.
+
+**Alternatives.** Liquibase OSS Databricks extension: mature change management, but Java/JDBC on
+serverless and changelogs outside the Python stack. A hand-written runner: no revision graph,
+offline SQL or ecosystem. Bundle-managed tables: Asset Bundles do not manage table DDL changes.
+
+**Consequences.** One migration runner at a time (notebook or a job with `max_concurrent_runs: 1`).
+Every structure change is reviewed as offline SQL (`platform db sql`) and tested offline
+(`tests/test_platform.py`). Verified on Free Edition on 2026-11-27: upgrade, idempotent sync,
+downgrade/upgrade round trip and restore points.
+
+## ADR-013: Every model call through Unity Gateway, attributed by request tags; self-managed embeddings (2026-11-27)
+
+**Decision.** Chat and embedding models are called only through Unity Gateway by Unity Catalog
+model service names, listed in `config/model_catalog.yaml` (approved / candidate / unavailable /
+retired). Each call carries a `Databricks-Ai-Gateway-Request-Tags` header (`lh_event_id`,
+`lh_use_case`, `lh_purpose`, `lh_environment`, `lh_prompt_version`). The same event ID keys a
+row in `ai_observability.model_invocation` with the domain context only the application knows,
+such as prompt version, evaluation run and synthetic case ID. Views join it to
+`system.ai_gateway.usage`, preferring the gateway's tokens and latency. Vector Search uses a
+Delta Sync index with a **self-managed** embedding column: chunks and queries are embedded by
+`embed-default` (`system.ai.qwen3-embedding-0-6b`, 1024-d) through the gateway.
+
+**Alternatives.** Vector Search managed embeddings (`databricks-gte-large-en`) call a serving
+endpoint directly, outside the gateway's usage, limits and audit trail. Logging tokens only in
+our own table duplicates the system table and misses calls made by other tools.
+
+**Consequences.** Gateway usage rows arrive with a delay, so dashboards show `gateway_confirmed`
+filling in later. Changing the embedding model means re-embedding and re-syncing the index
+(new `embedding_model_service` triggers the chunk MERGE update). No prompt or response text is
+stored in observability tables.
+
+## ADR-014: Cost from a Git rate card; observability dashboard as code (2026-11-27)
+
+**Decision.** Model cost is computed, not imported: `v_model_call_cost` multiplies the gateway's
+input and output token counts by the rate in force on the call's date, from
+`ai_marketplace.model_price`. Rates live in `config/model_pricing.yaml` (reviewed in pull requests,
+effective-dated, `price_source` illustrative / list / contract) and are mirrored by one MERGE in
+`lighthouse platform models sync`. The AI/BI (Lakeview) dashboard is generated by
+`lighthouse_poc.platform.dashboard` and deployed by notebook 04 (create or update by path, then
+publish). All charts aggregate one call-grain dataset so page filters and click-to-filter work
+across the page; latency percentiles come from a separate SQL-aggregated dataset.
+
+**Alternatives.** `system.billing.usage` gives DBUs per serving endpoint, not per gateway request,
+use case or prompt version. Hard-coding prices in a view hides history and review. A dashboard
+built only in the UI cannot be reviewed, recreated per schema prefix or kept in sync with
+schema changes.
+
+**Consequences.** Cost figures are only as good as the rate card; the shipped rates are
+illustrative and say so (`price_source`, dashboard text). A price change is a new row, so past
+cost stays stable. UI edits to the dashboard draft are overwritten by the next deploy unless
+they are moved into code or made on a clone.
+
+## ADR-015: Attribution in every code path; local copy of gateway usage (2026-11-27)
+
+**Decision.** Every gateway client (`GatewayChatClient`, `GatewayEmbeddingClient`) takes its request
+tags from a usage tracker (`lighthouse_poc.usage`) instead of from callers. Context has three
+levels: profile defaults (`platform.use_case`, `platform.environment`), the active run
+(`tracked_run`: activity `try` / `eval` / `notebook`, prompt version, MLflow run ID; process-wide,
+because MLflow evaluates cases in worker threads), and the current case (`case_scope`, set by
+the assistant). Tags: `lh_event_id`, `lh_use_case`, `lh_purpose`, `lh_activity`,
+`lh_environment`, `lh_prompt_version`, `lh_run_id`, `lh_model_key`. LLM judges called inside
+MLflow get the run's tags through the scorer `extra_headers`. App calls are recorded and written
+to `model_invocation` once per run (`UsageRecorder`, Databricks profile only, skipped with a
+warning while the platform schemas are behind head; write failures are logged and reported,
+never raised, so evaluation evidence is not lost). Revision 0004 adds
+`ai_observability.gateway_usage`, an incremental MERGE copy of `system.ai_gateway.usage` with
+every tag as a column, which the views and the dashboard read. It is refreshed by the hourly
+job `lighthouse-platform-usage-sync`, notebook 04 and `lighthouse platform usage sync`.
+
+**Alternatives.** Passing tags at each call site misses paths (the first version did: 49 calls
+were unattributed). Reading the system table directly costs about 2 s of planning per query
+(measured 2.6 s vs 0.4 s for the same 107 rows in Delta). A materialized view over a system table
+needs a pipeline and adds no tag columns. Partitioning tables of a few KB would only add small
+files.
+
+**Consequences.** Dashboard and usage queries run about 4-5× faster (`v_model_call_cost`
+3.0 s → 0.6 s). The copy is as fresh as its last sync, on top of the system table's own delay
+(observed 10-40 minutes). Judge calls have no application event, so their attribution relies on
+gateway tags. MLflow's pre-flight call of `predict_fn` is a real model call and is recorded.
+Calls made before 2026-11-27 stay unattributed: system table rows cannot be re-tagged.
+
+## ADR-016: Record every evaluation and review decision in the experiment and in Unity Catalog; capability-checked features (2026-11-27)
+
+**Decision.** `lighthouse eval` (and so notebook 05) records each run in five places beyond the
+run itself: the evaluated prompt version linked to the run and every trace; the golden set as an
+MLflow evaluation dataset (a Unity Catalog table `<catalog>.<prompt schema>.<spec>_golden` on
+Databricks; the run is evaluated against it when it uses the whole set); the spec's LLM judges
+registered in the experiment (Scorers tab); optionally (`--review-session`) a Review App
+labeling session with the run's traces and a `lighthouse_release_review` label (ready /
+needs_work / reject); and `eval_run` + per-case `eval_case_result` rows in Unity Catalog.
+`lighthouse promote` adds the decision as a HUMAN assessment on every trace of the evidence run
+and a `release_decision` row. Each MLflow feature is capability-checked
+(`lighthouse_poc.experiment_assets`): when the workspace does not offer it, the step reports
+`SKIPPED` with the reason and the run continues, so the same code works on Free Edition and starts
+using the feature on an enterprise workspace. Unity Catalog rows go through `PlatformWriter`
+(schemas at head, failures logged and reported, never raised).
+
+**Judge registration.** The experiment only accepts Databricks-served judge models, so the
+registered copies name the Databricks endpoint of the same model (`system.ai.gpt-oss-120b` ->
+`databricks:/databricks-gpt-oss-120b`) and carry no gateway headers; evaluations keep calling the
+judge through Unity Gateway with request tags (ADR-015). A judge served elsewhere (Kong) is not
+registered.
+
+**Alternatives.** Evaluating every run against the dataset object would break `--limit` smoke runs
+(the dataset holds the whole set). Writing UC rows from MLflow later (a sync job) would delay the
+data and duplicate the review logic.
+
+**Consequences.** One notebook 05 run fills the Prompts, Datasets, Scorers and Review App views and
+the UC tables. The human approval itself is still recorded only by a person running `promote`.
+The job script `scripts/evaluate.py` (no evaluation spec) does not write these records yet.
+
+## ADR-017: Experiment traces stored in Unity Catalog (2026-11-27)
+
+**Decision.** On Databricks the experiment is activated through `lighthouse_poc.tracking.activate_experiment`,
+which links it to Unity Catalog trace tables next to the prompts (profile `mlflow.trace_storage`):
+`<catalog>.<prompt schema>.<prefix>_otel_spans`, `_otel_logs`, `_otel_annotations`,
+`_trace_metadata`, `_trace_unified`, with prefix `lh_<experiment name>`. Spans, judge assessments
+and human labels are then governed by Unity Catalog and queryable with SQL. The CLI, the evaluation
+job and notebook 05 use it.
+
+**Constraints found (Free Edition, 2026-11-27).** Schema-level trace locations are disabled; the
+table-prefix form works. An experiment that already holds traces cannot be linked, so the bundle
+adds a new experiment `lighthouse-claim-settlement-poc-uc-<target>` (job and notebook 05 default)
+and keeps the old one as a read-only archive. If linking fails the experiment is activated with
+MLflow-managed storage and the reason is logged and printed (ADR-016 capability rule).
+
+**Consequences.** Verified live: eval with judges, gate/rubric assessments, prompt links, Review App
+sessions, HUMAN assessments, `search_traces` by run, and the UC result rows all work with UC-stored
+traces. Old traces stay in the archive experiment (Databricks' migration tool can move them).

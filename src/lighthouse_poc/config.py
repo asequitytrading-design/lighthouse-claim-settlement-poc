@@ -24,6 +24,7 @@ PROFILE_ENV_VAR = "LIGHTHOUSE_PROFILE"
 GATEWAY_KINDS = {"kong", "unity_gateway"}
 AUTH_TYPES = {"none", "api_key_header", "bearer_env", "databricks_sdk"}
 MODEL_KINDS = {"gateway", "mock", "mlflow_uri"}
+MODEL_TASKS = {"chat", "embeddings"}
 
 _VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
@@ -93,6 +94,7 @@ class ModelRoute:
     upstream_model: str | None = None
     params: Mapping[str, Any] = field(default_factory=dict)
     model_uri: str | None = None  # kind=mlflow_uri only, e.g. "databricks" managed judge
+    task: str = "chat"            # chat | embeddings
 
     def request_model(self) -> str:
         """Value for the OpenAI ``model`` field. Empty lets a pinning gateway choose."""
@@ -120,6 +122,26 @@ class EvaluationConfig:
 
 
 @dataclass(frozen=True)
+class PlatformConfig:
+    """Unity Catalog data platform of the AI Marketplace (Databricks profile only)."""
+    catalog: str
+    schema_prefix: str = ""
+    warehouse_id: str | None = None
+    vector_search_endpoint: str = "lighthouse-vs"
+    embedding_model: str = "embed-default"
+    use_case: str = "claim_settlement_assistant"   # request tag lh_use_case of application calls
+    environment: str = "dev"                       # request tag lh_environment (dev | ci | prod)
+
+
+@dataclass(frozen=True)
+class TraceStorageConfig:
+    """Unity Catalog tables for the experiment's traces (Databricks only, ADR-017)."""
+    catalog: str
+    schema: str
+    table_prefix: str | None = None       # default: lh_<experiment name>
+
+
+@dataclass(frozen=True)
 class Profile:
     name: str
     environment: str
@@ -133,6 +155,8 @@ class Profile:
     source: Path
     evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     registry_uri: str | None = None
+    platform: PlatformConfig | None = None
+    trace_storage: "TraceStorageConfig | None" = None
 
     def model(self, alias: str | None = None) -> ModelRoute:
         alias = alias or self.default_app_model
@@ -188,19 +212,40 @@ def _parse(name: str, data: Mapping, source: Path) -> Profile:
             raise ConfigurationError(f"models.{alias} needs a 'route' or 'upstream_model'")
         if kind == "mlflow_uri" and not spec.get("model_uri"):
             raise ConfigurationError(f"models.{alias} (kind mlflow_uri) needs 'model_uri'")
+        task = spec.get("task", "chat")
+        if task not in MODEL_TASKS:
+            raise ConfigurationError(f"models.{alias}.task must be one of {sorted(MODEL_TASKS)}")
         models[alias] = ModelRoute(alias=alias, kind=kind, route=spec.get("route"),
                                    upstream_model=spec.get("upstream_model"),
                                    params=dict(spec.get("params") or {}),
-                                   model_uri=spec.get("model_uri"))
+                                   model_uri=spec.get("model_uri"), task=task)
 
     defaults = data.get("defaults") or {}
     evaluation = data.get("evaluation") or {}
+    platform = data.get("platform")
+    platform_config = None
+    if platform is not None:
+        if not isinstance(platform, Mapping) or not platform.get("catalog"):
+            raise ConfigurationError(f"Profile {source.name}: platform.catalog is required")
+        platform_config = PlatformConfig(
+            catalog=str(platform["catalog"]),
+            schema_prefix=str(platform.get("schema_prefix") or ""),
+            warehouse_id=str(platform["warehouse_id"]) if platform.get("warehouse_id") else None,
+            vector_search_endpoint=str(platform.get("vector_search_endpoint") or "lighthouse-vs"),
+            embedding_model=str(platform.get("embedding_model") or "embed-default"),
+            use_case=str(platform.get("use_case") or "claim_settlement_assistant"),
+            environment=str(platform.get("environment") or "dev"))
     profile = Profile(
         name=name,
         environment=str(data.get("environment", name)),
         tracking_uri=mlflow_cfg.get("tracking_uri"),
         registry_uri=mlflow_cfg.get("registry_uri"),
         experiment=mlflow_cfg.get("experiment"),
+        trace_storage=(TraceStorageConfig(
+            catalog=str(mlflow_cfg["trace_storage"]["catalog"]),
+            schema=str(mlflow_cfg["trace_storage"]["schema"]),
+            table_prefix=str(mlflow_cfg["trace_storage"].get("table_prefix") or "") or None)
+            if isinstance(mlflow_cfg.get("trace_storage"), Mapping) else None),
         prompt_name=registry.get("prompt_name"),
         gateway=GatewayConfig(
             kind=gateway_kind, base_url=gateway.get("base_url"),
@@ -217,6 +262,7 @@ def _parse(name: str, data: Mapping, source: Path) -> Profile:
                                 if evaluation.get("max_scorer_workers") else None),
             judge_timeout_seconds=(int(evaluation["judge_timeout_seconds"])
                                    if evaluation.get("judge_timeout_seconds") else None)),
+        platform=platform_config,
     )
     profile.model(profile.default_app_model)  # fail fast on a dangling default
     if profile.default_judge_model:
