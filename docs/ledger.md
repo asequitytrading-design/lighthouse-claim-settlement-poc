@@ -36,7 +36,7 @@ export DATABRICKS_CONFIG_PROFILE=lighthouse                    # Databricks CLI 
 |---|---|---|---|
 | A1 | Practise the UI demo: Playground edit → save v3 → Run judges → `lighthouse eval` → compare runs → `lighthouse promote` | User | Steps in `docs/mlflow-ui-guide.md`; local stack only |
 | A2 | Raise the PR for `feat/lighthouse-cli` (7 commits) after the user's manual validation | Claude, when asked | The user merges from the CLI (`gh pr merge <n> --merge`) |
-| A3 | First `@champion` approval: local `claim_settlement_review` / `claim_intake_triage`, and Databricks dev (`dev_asequitytrading_lighthouse.claim_settlement_review` v3, evidence run `16f8f14342704ea6900c48f4a41cb6c3`, mock) | User (human decision) | Until then the agent and `lighthouse try` fail closed by design. Prefer a real-model run as evidence (A5) |
+| A3 | First `@champion` approval: local `claim_settlement_review` / `claim_intake_triage`, and Databricks dev (`dev_<user>_lighthouse.claim_settlement_review` v3, evidence run `16f8f14342704ea6900c48f4a41cb6c3`, mock) | User (human decision) | Until then the agent and `lighthouse try` fail closed by design. Prefer a real-model run as evidence (A5) |
 | A4 | Target `ci` after the merge: schema `workspace.lighthouse` belongs to SP `lighthouse-ci`; the user gets `PERMISSION_DENIED` reading it, so the first `ci` approval needs a grant to the user or a promote run as the SP | User + Claude | Decide on the grant (USE SCHEMA, EXECUTE, MANAGE on prompts) or an SP-run promote |
 | A5 | Real-model job run on dev: `databricks bundle run lighthouse_prompt_eval --params app_model=claims-medium,scorer_mode=llm-judges,judge_model=claims-judge` | Claude, when asked | Gives READY evidence based on real models, not the mock |
 | A6 | Verify SP `lighthouse-ci` can call the Unity Gateway model services (real-model CI runs) | Claude | Not verified; mock CI works |
@@ -61,7 +61,7 @@ gemma4-e4b-32k (judge).
 - Gateway endpoints `kong-claims-small` / `-medium` (track into exp 10), `kong-claims-judge`.
 - No `@champion` anywhere locally.
 
-**Databricks Free Edition** (host `dbc-79305b3a-397f`, CLI profile `lighthouse`):
+**Databricks Free Edition** (host `<workspace host>`, CLI profile `lighthouse`):
 - Vector Search endpoint `lighthouse-vs` (STANDARD, created 2026-11-27); no platform schemas yet
   (the notebook creates `dev_<user>_ai_*`).
 - dev target deployed from branch head `17206e1`; job run `299740435896324` SUCCESS (mock,
@@ -86,15 +86,14 @@ gemma4-e4b-32k (judge).
 - Agent loop + guardrails + claims copilot (default model claims-alt-qwen-next; gpt-oss returned
   empty replies on follow-ups -> one retry); FastAPI (SSE chat, playground, usage, evals, cache,
   warm-up); React UI (copilot, playground, dashboard, evaluations).
-- Databricks App `lighthouse-demo-dev` (SP 5d9285db-..., grants applied), Lakebase project
+- Databricks App `lighthouse-demo-dev` (app service principal, grants applied), Lakebase project
   `lighthouse-demo` (CU_1, pgvector 0.8.7, app schema lighthouse_app). Both DOWN after testing
   (`scripts/demo_env.py down`; Lakebase endpoint disabled). `up` path not yet exercised end to end.
 - Local: docker compose demo-pg (5434). 322 tests offline.
 
 ### 2026-11-27 (demo phase 1: claims data and MCP tools; ADR-018)
-- Revision 0005 applied to dev: `dev_asequitytrading_ai_claims` (claim_case 40, claim_document 160,
-  `get_claim_case`). Genie space "Lighthouse claims (dev_asequitytrading)"
-  `01f1ea5c41ad185297cb5103da28d66a` (a duplicate created by the first lookup was trashed).
+- Revision 0005 applied to dev: `dev_<user>_ai_claims` (claim_case 40, claim_document 160,
+  `get_claim_case`). Genie space "Lighthouse claims (dev_<user>)" (ID in the local bundle overrides; a duplicate created by the first lookup was trashed).
 - `agents/` package: core tool contract, MCP client, Databricks MCP tools, claims copilot tool set.
   Live via managed MCP: case lookup (and not found), guidance (off-topic refused), Genie (SQL +
   answer). Tool calling 32/32 across 4 models. 297 tests offline.
@@ -153,7 +152,7 @@ gemma4-e4b-32k (judge).
   Applications (eval, try, agent) still do not tag calls: next platform phase.
 
 ### 2026-11-27 (later)
-- Notebook 02 run by the user on Databricks: `dev_asequitytrading_ai_*` created, 8 events.
+- Notebook 02 run by the user on Databricks: `dev_<user>_ai_*` created, 8 events.
 - Revision `0003_model_cost` (ADR-014): `model_price` rate card (`config/model_pricing.yaml`,
   illustrative rates), views `v_model_price`, `v_model_call_cost`, `v_model_cost_daily`.
   Applied to the dev prefix; live downgrade/upgrade round trip OK.

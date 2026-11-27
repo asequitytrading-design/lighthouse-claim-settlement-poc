@@ -33,6 +33,8 @@ See `src/lighthouse_poc/api/settings.py`: `LIGHTHOUSE_SESSION_STORE` (`sqlite` |
 ## On Databricks (Databricks Apps + Lakebase)
 
 ```bash
+# once: put your workspace IDs in .databricks/bundle/dev/variable-overrides.json (gitignored):
+#   {"genie_space_id": "<from lighthouse platform genie ensure>", "warehouse_id": "<SQL warehouse id>"}
 # once: deploy the app (Lakebase sessions + cache) and grant its identity access
 databricks bundle deploy -t dev --var genie_space_id=<space> --var warehouse_id=<wh> --var session_store=lakebase
 lighthouse --profile databricks platform app grants --prefix dev_<you>_ --principal <app SP id> --prompt-schema dev_<you>_lighthouse
