@@ -3,29 +3,44 @@
 Running record of progress, environment state and open actions. Update it at the end of each
 session; newest entries first. Synthetic data only.
 
-## Resume here (last updated 2026-11-27)
+## Resume here (last updated 2026-11-27, end of day)
 
-**Branch:** `feat/demo-thin-ui` (from `main` at `8305b85`). PR #3 (`feat/lighthouse-cli`) merged;
-all merged branches deleted locally and on GitHub. CI: tests on every push/PR; Databricks deploy
-is manual only (`DEPLOY_ON_MAIN` / `RUN_JOB_ON_MAIN` repo variables to re-enable) to save Free
-Edition capacity.
+**State:** `main` at `25a2285` (PR #5 demo, squash) after PR #4 (public release: MIT license,
+CODEOWNERS, setup guide). All feature branches merged and deleted. This ledger update is on local
+branch `chore/ledger-handoff` (not pushed). The repository is **public**; ruleset "Protect main"
+needs a code-owner approval, so merges use the admin bypass only with the user's explicit OK.
+CI: tests on every push/PR; Databricks deploys are manual. 328 tests offline.
 
-**Current focus: demo for Arjun, Monday 2026-11-30: ready (docs/demo-script.md). Run
-`python scripts/demo_env.py up --deploy` 30 min before, `down` after.** Thin local UI (Playground, Dashboard, chat agent)
-over an API layer on what exists; agent enriched with Unity Catalog data through MCP; semantic
-cache candidate (Lakebase); prompt registry and eval added to the same UI later. Brainstorm,
-feasibility, then design and implementation plan in `docs/demo-thin-ui.md` before code.
+**Demo for the engagement lead: Monday 2026-11-30 — ready.** User validates and runs it through
+on 2026-11-28.
+- Script: `docs/demo-script.md` (10 steps, dry-run timings, fallbacks); screenshots in
+  `apps/lighthouse_demo/fallback/`.
+- Start 30 min before: `python scripts/demo_env.py up --deploy` (Lakebase on, deploy, app on,
+  warm-up, prints the URL); afterwards `python scripts/demo_env.py down`.
+- Live switches without restart: notebook `06_demo_app_controls` step 3 (model, cache, grounding,
+  Genie, Lakebase/SQLite), applied within ~60 s.
+- Databricks state now: app `lighthouse-demo-dev` STOPPED, Lakebase project `lighthouse-demo`
+  compute disabled (IDLE). Default model `claims-alt-qwen-next`.
+- Workspace IDs are not in git: `.databricks/bundle/dev/variable-overrides.json` (gitignored)
+  holds `genie_space_id` and `warehouse_id`; recreate with `lighthouse platform genie ensure` and
+  the SQL warehouse list if the file is lost.
 
 **Open user actions:**
-1. Real `promote` through notebook 05 step 9 when a registered version is green (Claude does
-   not record approvals).
-2. Replace illustrative rates in `config/model_pricing.yaml` when contract rates exist.
-3. Optional: unpause the hourly usage sync job; migrate archive-experiment traces to UC.
+1. Validation run-through (2026-11-28); report anything to fix.
+2. Optional before Monday: approve a prompt version (notebook 05 step 9) so the handoff uses the
+   governed `@champion` template (otherwise it says it was written without the approved template).
+3. Phase 6 (Agent Bricks side by side) only if wanted; the script presents it as the next step.
+4. Replace illustrative rates in `config/model_pricing.yaml` when contract rates exist.
+5. Rotate the CI service principal secret before 2027-02-23.
+
+**Known limits:** turns are serialised (single presenter); Genie answers take 10-20 s; avoid
+`claims-medium` live (reasoning, p95 > 2 min); on Free Edition Lakebase can only be stopped by
+disabling the branch endpoint; chat history in SQLite mode is lost on app restart.
 
 Quick re-entry commands:
 ```bash
 docker compose up -d && python scripts/seed_ui_demo.py        # local stack + UI demo state
-python -m pytest -q                                            # 287 tests, offline
+python -m pytest -q                                            # 328 tests, offline
 lighthouse prompt list --prompt-name claim_intake_triage
 export DATABRICKS_CONFIG_PROFILE=lighthouse                    # Databricks CLI profile
 ```
