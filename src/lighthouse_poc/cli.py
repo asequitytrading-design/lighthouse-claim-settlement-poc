@@ -453,6 +453,98 @@ def cmd_promote(ctx: Context, args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- platform commands (ADR-012)
+def _platform(ctx: Context, args):
+    from .platform.runtime import platform_names
+    return platform_names(ctx.profile, catalog=args.catalog, prefix=args.prefix)
+
+
+def _engine(ctx: Context, args, names):
+    from .platform.runtime import warehouse_engine
+    return warehouse_engine(ctx.profile, names, ctx.logger, warehouse_id=args.warehouse)
+
+
+def cmd_platform_db(ctx: Context, args) -> int:
+    from .platform.migrations import SchemaMigrator
+    names = _platform(ctx, args)
+    action = args.db_command
+    if action in ("history", "sql"):
+        migrator = SchemaMigrator(names, ctx.logger)
+        if action == "history":
+            heads = set(migrator.heads())
+            for rev in migrator.revisions():
+                print(f"{rev.revision:<32} <- {rev.down_revision or 'base':<32} "
+                      f"{'(head) ' if rev.revision in heads else ''}{rev.message.splitlines()[0]}",
+                      file=ctx.out)
+        else:
+            print(migrator.offline_sql(target=args.to, start=args.start), file=ctx.out)
+        return 0
+    engine = _engine(ctx, args, names)
+    try:
+        return _platform_db_online(ctx, args, names, SchemaMigrator(names, ctx.logger, engine=engine))
+    finally:
+        engine.dispose()   # close warehouse sessions before exit (avoids connector shutdown noise)
+
+
+def _platform_db_online(ctx: Context, args, names, migrator) -> int:
+    action = args.db_command
+    if action == "current":
+        current = migrator.current()
+        heads = migrator.heads()
+        print(f"{names.catalog} prefix '{names.prefix}': {', '.join(current) or 'base (not migrated)'}"
+              f"{'' if current == heads else f'  (head: {chr(44).join(heads)})'}", file=ctx.out)
+        return 0
+    if action == "restore-sql":
+        for statement in migrator.restore_statements(args.run_id):
+            print(statement + ";", file=ctx.out)
+        return 0
+    if action == "upgrade":
+        run_id = migrator.upgrade(args.to)
+    else:
+        run_id = migrator.downgrade(args.to)
+    print(f"{action} to {args.to}: done (migration run {run_id}); now at "
+          f"{', '.join(migrator.current()) or 'base'}", file=ctx.out)
+    print(f"Restore points: lighthouse platform db restore-sql {run_id}", file=ctx.out)
+    return 0
+
+
+def cmd_platform_models(ctx: Context, args) -> int:
+    from .platform.model_catalog import ModelCatalogSync, load_model_catalog
+    entries = load_model_catalog(args.file)
+    if args.models_command == "list":
+        for e in entries:
+            print(f"{e.key:<24} {e.task:<10} {e.status:<11} {','.join(e.roles):<16} {e.model_service}",
+                  file=ctx.out)
+        return 0
+    names = _platform(ctx, args)
+    engine = _engine(ctx, args, names)
+    try:
+        counts = ModelCatalogSync(names, ctx.logger).sync(engine, entries)
+    finally:
+        engine.dispose()
+    print(f"Synced {len(entries)} models into {names.table('model_catalog')}: "
+          f"{counts.get('opened', 0)} new or changed, {counts.get('closed_removed', 0)} removed",
+          file=ctx.out)
+    return 0
+
+
+def cmd_platform_verify(ctx: Context, args) -> int:
+    from .platform.verification import SetupVerifier
+    names = _platform(ctx, args)
+    engine = _engine(ctx, args, names)
+    try:
+        report = SetupVerifier(ctx.profile, names, engine, ctx.logger,
+                               environment=args.environment).run(
+            migrate=not args.no_migrate, vectors=not args.no_vectors,
+            index_timeout_s=args.index_timeout)
+    finally:
+        engine.dispose()
+    for check in report.checks:
+        print(f"{check.status:<5} {check.step:<13} {check.detail}", file=ctx.out)
+    print("Setup verified." if report.passed else "Setup NOT verified: see FAIL lines.", file=ctx.out)
+    return 0 if report.passed else 1
+
+
 # ---------------------------------------------------------------- parser and entry point
 def _common(parser: argparse.ArgumentParser, suppress: bool) -> None:
     default = argparse.SUPPRESS if suppress else None
@@ -540,6 +632,50 @@ def build_parser() -> argparse.ArgumentParser:
     promote.set_defaults(handler=cmd_promote)
     for sub in (cases, trial, evaluation, promote):
         _common(sub, suppress=True)
+
+    platform = commands.add_parser(
+        "platform", help="AI Marketplace data platform on Unity Catalog (schema migrations, models)")
+    platform_commands = platform.add_subparsers(dest="platform_command", required=True,
+                                                metavar="area")
+    db = platform_commands.add_parser("db", help="Schema migrations (Alembic on a SQL warehouse)")
+    db_commands = db.add_subparsers(dest="db_command", required=True, metavar="action")
+    db_actions = {
+        "history": db_commands.add_parser("history", help="Revisions, oldest first (offline)"),
+        "sql": db_commands.add_parser("sql", help="SQL an upgrade would run (offline review)"),
+        "current": db_commands.add_parser("current", help="Applied revision in the workspace"),
+        "upgrade": db_commands.add_parser("upgrade", help="Apply revisions (default: to head)"),
+        "downgrade": db_commands.add_parser("downgrade", help="Revert to a revision (or -1)"),
+        "restore-sql": db_commands.add_parser(
+            "restore-sql", help="RESTORE TABLE statements for a migration run's restore points"),
+    }
+    db_actions["sql"].add_argument("--from", dest="start", help="Start revision (default: base)")
+    db_actions["sql"].add_argument("--to", default="head", help="Target revision (default: head)")
+    db_actions["upgrade"].add_argument("--to", default="head", help="Target revision (default: head)")
+    db_actions["downgrade"].add_argument("--to", required=True, help="Target revision, e.g. -1")
+    db_actions["restore-sql"].add_argument("run_id", help="Migration run ID printed by upgrade")
+    models = platform_commands.add_parser("models", help="Governed model catalog")
+    models_commands = models.add_subparsers(dest="models_command", required=True, metavar="action")
+    model_actions = [models_commands.add_parser("list", help="Models in config/model_catalog.yaml"),
+                     models_commands.add_parser("sync", help="Merge the YAML into the catalog table")]
+    for sub in model_actions:
+        sub.add_argument("--file", help="Model catalog YAML (default: config/model_catalog.yaml)")
+    verify = platform_commands.add_parser(
+        "verify", help="End-to-end check: migrations, catalog, gateway, knowledge, vectors, views")
+    verify.add_argument("--no-migrate", action="store_true", help="Do not apply migrations")
+    verify.add_argument("--no-vectors", action="store_true", help="Skip Vector Search (step 7)")
+    verify.add_argument("--index-timeout", type=int, default=1800,
+                        help="Seconds to wait for the vector index (default 1800)")
+    verify.add_argument("--environment", default="dev", help="Request tag lh_environment")
+    verify.set_defaults(handler=cmd_platform_verify)
+    for sub in (*db_actions.values(), *model_actions, verify):
+        _common(sub, suppress=True)
+        sub.add_argument("--catalog", help="Override platform.catalog")
+        sub.add_argument("--prefix", help="Override platform.schema_prefix (e.g. dev_<user>_)")
+        sub.add_argument("--warehouse", help="SQL warehouse ID (default: profile or first available)")
+    for sub in db_actions.values():
+        sub.set_defaults(handler=cmd_platform_db)
+    for sub in model_actions:
+        sub.set_defaults(handler=cmd_platform_models)
     return parser
 
 

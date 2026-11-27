@@ -259,3 +259,49 @@ it executes registered code. The UI judge copies duplicate the spec criteria; te
 they agree on fixtures, and `lighthouse eval` remains the scoring of record. The seed never sets
 `@champion`.
 
+
+## ADR-012: AI Marketplace data platform on Unity Catalog with Alembic migrations (2026-11-27)
+
+**Decision.** The AI Marketplace stores what it produces in Unity Catalog, in three schemas per
+environment: `ai_marketplace` (model catalog, use cases, release decisions, migration audit),
+`ai_observability` (model invocations, evaluation summaries, vector queries, dashboard views)
+and `ai_knowledge` (documents, embedded chunks, vector index). A schema prefix (`dev_<user>_`)
+separates personal dev schemas inside the Free Edition `workspace` catalog. Structure changes
+are **Alembic revisions** run on a SQL warehouse through `databricks-sqlalchemy`
+(`lighthouse platform db …`, `src/lighthouse_poc/platform/alembic`). Revisions use placeholder
+names per environment, re-runnable statements (Delta DDL is not transactional), and carry
+their own data migration (e.g. `0002`: add a column, backfill it). Before every upgrade or
+downgrade the runner records each table's Delta version (`schema_migration_audit`) so data
+can be restored with `RESTORE TABLE`. Reference data is not migrated: the model list is YAML
+in Git, synced as a type-2 history (`lighthouse platform models sync`). Tables use column mapping,
+change data feed and liquid clustering. Design: `docs/ai-marketplace-platform.md`.
+
+**Alternatives.** Liquibase OSS Databricks extension: mature change management, but Java/JDBC on
+serverless and changelogs outside the Python stack. A hand-written runner: no revision graph,
+offline SQL or ecosystem. Bundle-managed tables: Asset Bundles do not manage table DDL changes.
+
+**Consequences.** One migration runner at a time (notebook or a job with `max_concurrent_runs: 1`).
+Every structure change is reviewed as offline SQL (`platform db sql`) and tested offline
+(`tests/test_platform.py`). Verified on Free Edition on 2026-11-27: upgrade, idempotent sync,
+downgrade/upgrade round trip and restore points.
+
+## ADR-013: Every model call through Unity Gateway, attributed by request tags; self-managed embeddings (2026-11-27)
+
+**Decision.** Chat and embedding models are called only through Unity Gateway by Unity Catalog
+model service names, listed in `config/model_catalog.yaml` (approved / candidate / unavailable /
+retired). Each call carries a `Databricks-Ai-Gateway-Request-Tags` header (`lh_event_id`,
+`lh_use_case`, `lh_purpose`, `lh_environment`, `lh_prompt_version`). The same event ID keys a
+row in `ai_observability.model_invocation` with the domain context only the application knows,
+such as prompt version, evaluation run and synthetic case ID. Views join it to
+`system.ai_gateway.usage`, preferring the gateway's tokens and latency. Vector Search uses a
+Delta Sync index with a **self-managed** embedding column: chunks and queries are embedded by
+`embed-default` (`system.ai.qwen3-embedding-0-6b`, 1024-d) through the gateway.
+
+**Alternatives.** Vector Search managed embeddings (`databricks-gte-large-en`) call a serving
+endpoint directly, outside the gateway's usage, limits and audit trail. Logging tokens only in
+our own table duplicates the system table and misses calls made by other tools.
+
+**Consequences.** Gateway usage rows arrive with a delay, so dashboards show `gateway_confirmed`
+filling in later. Changing the embedding model means re-embedding and re-syncing the index
+(new `embedding_model_service` triggers the chunk MERGE update). No prompt or response text is
+stored in observability tables.

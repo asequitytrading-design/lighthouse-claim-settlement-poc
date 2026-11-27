@@ -3,17 +3,20 @@
 Running record of progress, environment state and open actions. Update it at the end of each
 session; newest entries first. Synthetic data only.
 
-## Resume here (last updated 2026-11-26)
+## Resume here (last updated 2026-11-27)
 
 **Branch:** `feat/lighthouse-cli`, pushed, **no PR yet**. The user tests the UI demo flow and a
 dev deployment manually, then asks for the PR.
 
 **Next session, start with:**
-1. Ask how the manual UI walkthrough went (`docs/mlflow-ui-guide.md`, "Demo script") and fix
-   what they hit.
-2. When asked, raise the PR for `feat/lighthouse-cli` → `main`. Merging deploys target `ci` (see
-   action A4).
-3. Then take up the open actions below in the order the user chooses.
+1. User runs `notebooks/02_ai_marketplace_platform_setup.py` on Databricks (after
+   `databricks bundle deploy`; default prefix `dev_<user>_`) and reviews the platform design
+   (`docs/ai-marketplace-platform.md`, ADR-012/013). Fix what they hit.
+2. Next platform phase on request: applications write `model_invocation` with request tags
+   (agent, `lighthouse try/eval`), `eval_run` from `lighthouse eval`, `release_decision` from
+   `lighthouse promote`; bundle task `platform_migrate`; AI/BI dashboard.
+3. Commit and push the platform work and the local-test wrap-up when asked; PR for
+   `feat/lighthouse-cli` when asked (A2).
 
 Quick re-entry commands:
 ```bash
@@ -55,6 +58,8 @@ gemma4-e4b-32k (judge).
 - No `@champion` anywhere locally.
 
 **Databricks Free Edition** (host `dbc-79305b3a-397f`, CLI profile `lighthouse`):
+- Vector Search endpoint `lighthouse-vs` (STANDARD, created 2026-11-27); no platform schemas yet
+  (the notebook creates `dev_<user>_ai_*`).
 - dev target deployed from branch head `17206e1`; job run `299740435896324` SUCCESS (mock,
   deterministic; prompt v3 unchanged; baseline skipped because there is no champion).
 - ci target deployed from `main` (PR #1 and #2 merged) by SP `lighthouse-ci` via OAuth M2M;
@@ -64,7 +69,50 @@ gemma4-e4b-32k (judge).
 
 ## Progress log
 
+### 2026-11-27
+- Local MLflow UI/eval walkthrough wrapped up (meeting-summariser case closed; results in the
+  2026-11-26 entry; its harness stays local-only and bundle-excluded).
+- AI Marketplace data platform on Databricks (ADR-012, ADR-013, `docs/ai-marketplace-platform.md`):
+  Unity Catalog schemas `ai_marketplace` / `ai_observability` / `ai_knowledge` (10 tables, 4 views),
+  Alembic migrations on a SQL warehouse (`lighthouse platform db …`, revisions 0001 baseline,
+  0002 column + backfill example, restore points in `schema_migration_audit`), governed model
+  list `config/model_catalog.yaml` (type-2 sync), gateway embeddings client + request tags,
+  knowledge base (7 synthetic guidance docs) on Vector Search (Delta Sync, self-managed
+  embeddings), `lighthouse platform verify` and notebook `02_ai_marketplace_platform_setup.py`.
+- Model probe through Unity Gateway (2026-11-27): chat ok for gpt-oss-20b/120b, qwen35-122b,
+  qwen3-next-80b, llama-4-maverick; embeddings only qwen3-embedding-0-6b (1024-d); frontier and
+  gte/bge 404 on Free Edition.
+- Live check in throwaway prefix `zzcheck_` (Claude): `lighthouse platform verify` 8/8 PASS
+  (upgrade, idempotent catalog sync, downgrade/upgrade round trip, restore points, gateway
+  probes, knowledge embedding, vector query top hit `kb-life-evidence`, 14/21 events matched in
+  `system.ai_gateway.usage`). `zzcheck_` schemas and index dropped afterwards; Vector Search
+  endpoint `lighthouse-vs` kept (Free Edition allows one; the notebook reuses it).
+
 ### 2026-11-26
+- Meeting-summariser iteration (local experiment 10 only; real transcripts never leave the machine).
+  Harness `scripts/meeting_summariser_iterate.py` (dataset / run / judge `--votes N` / summary /
+  compare; bundle-excluded; unloads the 9b after every pass), dataset `meeting_summariser_transcripts`
+  (4 meetings), app model and judge both qwen3.5-9b (user's choice for 16 GB RAM).
+  - Judge round 1: aligned judges with the prompt's own unknown markers; `summary_json_format` v2
+    (R7 evidence times, R8 SPEAKER labels, R9 money; v1 had failed the prompt for "undefined", which
+    the prompt itself mandates). Round 2: material errors only, header and relative deadlines count
+    as stated, rationale under 60 words (judge JSON parse errors 6 → 0).
+  - Prompts: v1 (Playground), v2 (evidence times, relative due dates, task specifics, reply-owner,
+    decision scope, pending items, self-check), v3 (people only with a work fact, speaker
+    corrections, no decision/action overlap, evidence time before value in the schema).
+  - Results, judge checks passing (all-judges pass 0/4 everywhere): v1 21% (1 vote), v2 29%, v3 18%
+    (3-vote majority, runs `2a134958…`, `3c4a4033…`). Judge vote agreement only 46–50%: the 9b judge
+    contradicts itself on half of (meeting, judge) pairs, so v2 vs v3 is within noise. Format judge
+    25% for every version (R7/R8 persist: wording does not change the 9b's behaviour).
+  - **Reading:** the measuring instrument, not the prompt, is now the limit. Next session options:
+    (a) per-item judging (score each action item / decision, fraction correct) instead of one yes/no
+    per long meeting; (b) gemma4 as judge for scored runs (model swaps; transcripts must stay local,
+    so no hosted judge); (c) more deterministic code checks; (d) R7 evidence times as post-processing
+    or a warning; (e) keep v2 as the current best prompt. User decides.
+- Judge 7 `summary_json_format`: deterministic code judge for the meeting-summariser JSON
+  (R1-R6), `scripts/meeting_summary_format_judge.py`, registered in experiment 10, excluded from
+  the bundle sync. Replaces the structure rule of LLM judge 6, which gave contradictory verdicts on
+  identical structure; the user narrows judge 6 to filler/repetition.
 - Ollama service: `OLLAMA_KEEP_ALIVE=30m` (all models stay loaded until 30 min after their
   queue drains). Set in `~/Library/LaunchAgents/sh.brew.ollama.plist`; `brew services restart`
   or `brew upgrade ollama` regenerates that file and drops it, so re-add it afterwards and reload with

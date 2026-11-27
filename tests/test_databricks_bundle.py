@@ -46,10 +46,12 @@ def test_job_parameter_defaults_name_real_profile_models():
 def test_env_overrides_cover_every_profile_variable():
     profile_text = (ROOT / "config" / "profiles" / "databricks.yaml").read_text()
     profile_vars = set(re.findall(r"\$\{([A-Z_]+)", profile_text))
+    required = set(re.findall(r"\$\{([A-Z_]+)\}", profile_text))   # no ":-default"
     passed = {pair.split("=", 1)[0] for pair in env_args(TASKS["evaluate"])}
-    # Everything the profile reads must be supplied by the job; DATABRICKS_HOST is resolved
+    # Every variable without a default must be supplied by the job; DATABRICKS_HOST is resolved
     # at runtime from databricks-sdk auth, GIT_COMMIT is extra lineage for the script.
-    assert profile_vars - {"DATABRICKS_HOST"} <= passed, profile_vars - passed
+    # Defaulted platform variables (ADR-012) are not used by the eval job.
+    assert required - {"DATABRICKS_HOST"} <= passed, required - passed
     assert "DATABRICKS_HOST" not in passed  # ${workspace.host} is empty with CLI-profile auth
     assert passed - profile_vars <= {"GIT_COMMIT"}
     assert not any(k in passed for k in ("DATABRICKS_TOKEN", "KONG_API_KEY"))  # no secrets

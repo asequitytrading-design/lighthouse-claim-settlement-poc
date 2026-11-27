@@ -1,0 +1,112 @@
+# AI Marketplace model catalog: the models the platform may route to, by logical key.
+# Source of truth in Git; `lighthouse platform models sync` (or notebook 02) merges it into
+# <catalog>.<prefix>ai_marketplace.model_catalog as a type-2 history (valid_from/valid_to).
+#
+# Every model is called through Unity Gateway (<host>/ai-gateway/mlflow/v1) by its Unity
+# Catalog model service name. Status:
+#   approved     may be used by applications/judges in its roles
+#   candidate    reachable through the gateway, not yet approved for a role
+#   unavailable  listed in system.ai but not served through the gateway on this workspace
+#                (e.g. Free Edition); kept so a paid workspace can promote it by config
+#   retired      no longer used (kept for lineage of old runs)
+# Verified on the Free Edition workspace on 2026-11-27 (chat: "Reply OK"; embeddings: one
+# synthetic word, dimension checked).
+models:
+  # --- chat models -----------------------------------------------------------------------
+  - key: claims-small
+    model_service: system.ai.gpt-oss-20b
+    task: chat
+    family: gpt-oss
+    provider: openai-open-weights
+    roles: [app]
+    status: approved
+    verified: "2026-11-27"
+    notes: Low-cost drafting and triage.
+  - key: claims-medium
+    model_service: system.ai.qwen35-122b-a10b
+    task: chat
+    family: qwen
+    provider: alibaba-open-weights
+    roles: [app]
+    status: approved
+    verified: "2026-11-27"
+    notes: Default application model (same family as the local Ollama models).
+  - key: claims-judge
+    model_service: system.ai.gpt-oss-120b
+    task: chat
+    family: gpt-oss
+    provider: openai-open-weights
+    roles: [judge]
+    status: approved
+    verified: "2026-11-27"
+    notes: LLM judge; a different family from claims-medium (ADR-003).
+  - key: claims-alt-qwen-next
+    model_service: system.ai.qwen3-next-80b-a3b-instruct
+    task: chat
+    family: qwen
+    provider: alibaba-open-weights
+    roles: [app]
+    status: candidate
+    verified: "2026-11-27"
+  - key: claims-alt-llama
+    model_service: system.ai.llama-4-maverick
+    task: chat
+    family: llama
+    provider: meta-open-weights
+    roles: [app, judge]
+    status: candidate
+    verified: "2026-11-27"
+  - key: frontier-claude-sonnet
+    model_service: system.ai.databricks-claude-sonnet-5-5
+    task: chat
+    family: claude
+    provider: anthropic
+    roles: [app, judge]
+    status: unavailable
+    notes: Gateway returns 404 on Free Edition; promote on a paid workspace.
+  - key: frontier-gpt
+    model_service: system.ai.databricks-gpt-5-mini
+    task: chat
+    family: gpt
+    provider: openai
+    roles: [app, judge]
+    status: unavailable
+    notes: Gateway returns 404 on Free Edition.
+  - key: frontier-gemini
+    model_service: system.ai.databricks-gemini-3-5-flash
+    task: chat
+    family: gemini
+    provider: google
+    roles: [app, judge]
+    status: unavailable
+    notes: Gateway returns 404 on Free Edition.
+
+  # --- embedding models ------------------------------------------------------------------
+  - key: embed-default
+    model_service: system.ai.qwen3-embedding-0-6b
+    task: embeddings
+    family: qwen
+    provider: alibaba-open-weights
+    roles: [embedding]
+    status: approved
+    embedding_dimensions: 1024
+    verified: "2026-11-27"
+    notes: Knowledge-base and query embeddings for Mosaic AI Vector Search (self-managed).
+  - key: embed-gte-large
+    model_service: system.ai.gte_large_en_v1_5
+    task: embeddings
+    family: gte
+    provider: alibaba-open-weights
+    roles: [embedding]
+    status: unavailable
+    embedding_dimensions: 1024
+    notes: Serving endpoint databricks-gte-large-en only; not routed by the gateway (404).
+  - key: embed-bge-large
+    model_service: system.ai.bge_large_en_v1_5
+    task: embeddings
+    family: bge
+    provider: baai-open-weights
+    roles: [embedding]
+    status: unavailable
+    embedding_dimensions: 1024
+    notes: Serving endpoint databricks-bge-large-en only; not routed by the gateway (404).
