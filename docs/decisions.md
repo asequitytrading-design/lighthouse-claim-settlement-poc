@@ -404,3 +404,56 @@ MLflow-managed storage and the reason is logged and printed (ADR-016 capability 
 **Consequences.** Verified live: eval with judges, gate/rubric assessments, prompt links, Review App
 sessions, HUMAN assessments, `search_traces` by run, and the UC result rows all work with UC-stored
 traces. Old traces stay in the archive experiment (Databricks' migration tool can move them).
+
+## ADR-018: Agents package, Databricks managed MCP tools, synthetic claims schema (2026-11-27)
+
+**Decision.** Agents live in `src/lighthouse_poc/agents/`: `core/` (tool contract, later the loop and
+guardrails), `tools/` (a minimal MCP client and tools backed by Databricks managed MCP servers) and
+one folder per agent (`claims_copilot/`). The copilot's tools are Databricks-managed MCP servers, so
+nothing is hosted by us: `get_claim_case` (UC function, UC-functions server), `search_guidance`
+(knowledge index, Vector Search server; query embedded through Unity Gateway because the index uses
+self-managed embeddings; passages below similarity 0.52 are not returned) and `ask_portfolio`
+(Genie space, Genie server). Revision 0005 adds schema `<prefix>ai_claims` (stand-in for the client's
+claims lakehouse, synthetic only): `claim_case` (40), `claim_document` (160) and the
+`get_claim_case` function. The schema holds tool functions only, because the UC-functions MCP
+server exposes every function in it. The Genie space is created idempotently
+(`lighthouse platform genie ensure`) and found by title, or pinned with `LIGHTHOUSE_GENIE_SPACE_ID`.
+
+**Alternatives.** Our own MCP server (more control, but hosting and auth to run); the `mcp` SDK
+(SSE sessions are not needed for tools/list and tools/call on managed servers); direct SDK calls
+without MCP (the meeting asked for MCP, and MCP keeps tools portable to Agent Bricks and other
+clients).
+
+**Consequences.** Genie answers take 10-20 s and cold calls up to 8 s: the demo needs a warm-up.
+The Vector Search MCP server accepts a vector or text, not both (no hybrid through MCP). Genie lists
+spaces with a delay and renames duplicate titles, hence lookup by title prefix, oldest first.
+
+## ADR-019: Demo app on Databricks Apps with Lakebase sessions and a guidance-only semantic cache (2026-11-27)
+
+**Decision.** The demo runs as one Databricks App (`lighthouse-demo-<target>`, bundle resource):
+lighthouse-api (FastAPI) serving the built React UI, as the app's service principal with
+least-privilege Unity Catalog grants (`lighthouse platform app grants`), a SQL warehouse, the Genie
+space and a Lakebase database as app resources. Sessions and the semantic cache use one Postgres
+contract: Lakebase on Databricks (OAuth token as password, own schema `lighthouse_app`, pgvector
+installed once by the instance owner), Docker Postgres + pgvector locally, SQLite + in-memory cache
+for quick tests; an unreachable Postgres falls back to SQLite instead of failing the app. The cache
+holds guidance answers only (never case data), keyed by query embedding within index + embedding
+model, hit at cosine >= 0.95, 24 h TTL. `scripts/demo_env.py up|down|status` starts and stops the
+app and the Lakebase compute.
+
+**Measured (Free Edition, 2026-11-27).** Guidance turn 25 s from a laptop vs 7.6 s on Apps; with a
+cache hit 1.8 s (tool 0.47 s). Sessions survive an app restart on Lakebase.
+
+**Free Edition constraints.** Lakebase instances are autoscaling projects at 1 CU; the instance
+stop API and the auto-suspend timeout are not available on this tier, so `down` disables the
+branch endpoint (compute idle). The app identity cannot create in `public`.
+
+**Consequences.** Turns are serialised (one process-wide usage tracker): fine for one presenter;
+multi-user hosting needs per-request trackers. Chat history in SQLite mode is lost on restart.
+
+**Addendum (2026-11-27): live settings.** Revision 0006 adds `<mkt>.app_config`; notebook 06 writes
+validated settings (session store, default model, semantic cache and threshold, grounding check,
+Genie) and the running app re-reads them at most once a minute when requests arrive (background
+thread for chat; no polling while idle), rebuilding only the store/cache or the copilot. A notebook
+cannot call the app API (Apps accept OAuth user tokens), hence the table as the control channel.
+Verified live: model switch and cache off/on applied without restart.

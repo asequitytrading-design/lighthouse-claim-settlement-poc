@@ -21,3 +21,8 @@ dist/
 
 # editor swap files
 *.swp
+.lighthouse/
+
+# demo UI
+apps/lighthouse_demo/web/node_modules/
+apps/lighthouse_demo/web/dist/

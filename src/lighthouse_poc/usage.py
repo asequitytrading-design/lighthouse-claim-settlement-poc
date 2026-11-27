@@ -30,7 +30,7 @@ TAG_NAMES = {"use_case_id": "lh_use_case", "purpose": "lh_purpose", "environment
              "activity": "lh_activity", "prompt_version": "lh_prompt_version", "run_id": "lh_run_id"}
 
 # Activities: what kind of work made the call (dashboard filter "activity").
-ACTIVITIES = {"app", "try", "eval", "demo", "explorer", "verify", "notebook"}
+ACTIVITIES = {"app", "try", "eval", "demo", "explorer", "verify", "notebook", "playground"}
 
 
 @dataclass(frozen=True)
@@ -130,7 +130,7 @@ class UsageTracker:
         explicit = {k: str(v) for k, v in (explicit or {}).items() if v not in (None, "")}
         owned = "lh_event_id" in explicit
         event_id = explicit.get("lh_event_id") or str(uuid.uuid4())
-        context = self.call_context(purpose)
+        context = self.call_context(purpose or explicit.get("lh_purpose"))
         tags = {**context.tags(), "lh_model_key": model_key, "lh_event_id": event_id, **explicit}
         return event_id, context, tags, owned
 

@@ -83,7 +83,10 @@ class GroundedAnswer:
 
 
 def _normalise(text: str) -> str:
-    return " ".join(re.sub(r"[‘’“”`]", "'", text).lower().split()).strip(" .'\"")
+    """Case, quotes, dashes and spaces normalised (models write non-breaking hyphens, curly quotes)."""
+    text = re.sub(r"[‘’“”`]", "'", text)
+    text = re.sub(r"[\u2010-\u2015\u2212]", "-", text).replace("\u00a0", " ").replace("\u202f", " ")
+    return " ".join(text.lower().split()).strip(" .'\"")
 
 
 def parse_reply(text: str) -> dict | None:
@@ -110,9 +113,12 @@ class GroundedAnswerer:
     """Answers from retrieved passages or refuses; records its model call as a usage event."""
 
     def __init__(self, entry: ModelEntry, chat_client: Any, logger: logging.Logger,
-                 environment: str = "dev", confidence: RetrievalConfidence = RetrievalConfidence()):
+                 environment: str = "dev", confidence: RetrievalConfidence = RetrievalConfidence(),
+                 own_events: bool = True):
+        """own_events=True: the explorer records its own call events (notebook 03); False: the
+        active usage tracker records the call (agents inside tracked_run)."""
         self._entry, self._chat, self._environment = entry, chat_client, environment
-        self._logger = logger
+        self._logger, self._own_events = logger, own_events
         self.confidence = confidence
         self.events: list[ModelInvocation] = []
 
@@ -169,11 +175,16 @@ class GroundedAnswerer:
                                 activity="explorer")
         text = "\n\n".join(f"[{i}] {h.text}" for i, h in enumerate(passages, 1))
         started = time.perf_counter()
+        messages = [{"role": "system", "content": GROUNDED_SYSTEM},
+                    {"role": "user", "content": f"Question: {question}\n\nPassages:\n{text}"}]
+        tags = event.request_tags() if self._own_events else {"lh_purpose": "grounded_answer"}
         try:
-            result = self._chat.complete_messages(
-                [{"role": "system", "content": GROUNDED_SYSTEM},
-                 {"role": "user", "content": f"Question: {question}\n\nPassages:\n{text}"}],
-                tags=event.request_tags())
+            try:
+                result = self._chat.complete_messages(messages, tags=tags)
+            except ModelInvocationError as exc:     # reasoning models: an occasional empty reply
+                if exc.category != "empty_response":
+                    raise
+                result = self._chat.complete_messages(messages, tags=tags)
             event.input_tokens, event.output_tokens = result.prompt_tokens, result.completion_tokens
             event.served_model = result.served_model
             return parse_reply(result.text), None
@@ -184,7 +195,8 @@ class GroundedAnswerer:
             return None, exc.category
         finally:
             event.latency_ms = round((time.perf_counter() - started) * 1000)
-            self.events.append(event)
+            if self._own_events:
+                self.events.append(event)
 
 
 def ground(answerer: GroundedAnswerer, report: Any) -> GroundedAnswer:

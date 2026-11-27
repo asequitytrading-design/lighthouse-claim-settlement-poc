@@ -5,25 +5,27 @@ session; newest entries first. Synthetic data only.
 
 ## Resume here (last updated 2026-11-27)
 
-**Branch:** `feat/lighthouse-cli`, pushed, **no PR yet**. The user tests the UI demo flow and a
-dev deployment manually, then asks for the PR.
+**Branch:** `feat/demo-thin-ui` (from `main` at `8305b85`). PR #3 (`feat/lighthouse-cli`) merged;
+all merged branches deleted locally and on GitHub. CI: tests on every push/PR; Databricks deploy
+is manual only (`DEPLOY_ON_MAIN` / `RUN_JOB_ON_MAIN` repo variables to re-enable) to save Free
+Edition capacity.
 
-**Next session, start with:**
-1. User explores with `notebooks/03_explore_platform_data.py` and runs
-   `notebooks/04_observability_dashboard.py` (dashboard already deployed to
-   `/Workspace/Users/<user>/lighthouse/AI Marketplace observability (dev_asequitytrading_)`).
-   Widget rendering was not checked visually by Claude (no browser): fix any widget the user
-   reports in `platform/dashboard.py`. Replace illustrative rates when contract rates exist.
-2. Next platform phase on request: applications write `model_invocation` with request tags
-   (agent, `lighthouse try/eval`), `eval_run` from `lighthouse eval`, `release_decision` from
-   `lighthouse promote`; bundle task `platform_migrate`.
-3. Commit and push the platform work and the local-test wrap-up when asked; PR for
-   `feat/lighthouse-cli` when asked (A2).
+**Current focus: demo for Arjun, Monday 2026-11-30: ready (docs/demo-script.md). Run
+`python scripts/demo_env.py up --deploy` 30 min before, `down` after.** Thin local UI (Playground, Dashboard, chat agent)
+over an API layer on what exists; agent enriched with Unity Catalog data through MCP; semantic
+cache candidate (Lakebase); prompt registry and eval added to the same UI later. Brainstorm,
+feasibility, then design and implementation plan in `docs/demo-thin-ui.md` before code.
+
+**Open user actions:**
+1. Real `promote` through notebook 05 step 9 when a registered version is green (Claude does
+   not record approvals).
+2. Replace illustrative rates in `config/model_pricing.yaml` when contract rates exist.
+3. Optional: unpause the hourly usage sync job; migrate archive-experiment traces to UC.
 
 Quick re-entry commands:
 ```bash
 docker compose up -d && python scripts/seed_ui_demo.py        # local stack + UI demo state
-python -m pytest -q                                            # 166 tests, offline
+python -m pytest -q                                            # 287 tests, offline
 lighthouse prompt list --prompt-name claim_intake_triage
 export DATABRICKS_CONFIG_PROFILE=lighthouse                    # Databricks CLI profile
 ```
@@ -34,7 +36,7 @@ export DATABRICKS_CONFIG_PROFILE=lighthouse                    # Databricks CLI 
 |---|---|---|---|
 | A1 | Practise the UI demo: Playground edit → save v3 → Run judges → `lighthouse eval` → compare runs → `lighthouse promote` | User | Steps in `docs/mlflow-ui-guide.md`; local stack only |
 | A2 | Raise the PR for `feat/lighthouse-cli` (7 commits) after the user's manual validation | Claude, when asked | The user merges from the CLI (`gh pr merge <n> --merge`) |
-| A3 | First `@champion` approval: local `claim_settlement_review` / `claim_intake_triage`, and Databricks dev (`dev_asequitytrading_lighthouse.claim_settlement_review` v3, evidence run `16f8f14342704ea6900c48f4a41cb6c3`, mock) | User (human decision) | Until then the agent and `lighthouse try` fail closed by design. Prefer a real-model run as evidence (A5) |
+| A3 | First `@champion` approval: local `claim_settlement_review` / `claim_intake_triage`, and Databricks dev (`dev_<user>_lighthouse.claim_settlement_review` v3, evidence run `16f8f14342704ea6900c48f4a41cb6c3`, mock) | User (human decision) | Until then the agent and `lighthouse try` fail closed by design. Prefer a real-model run as evidence (A5) |
 | A4 | Target `ci` after the merge: schema `workspace.lighthouse` belongs to SP `lighthouse-ci`; the user gets `PERMISSION_DENIED` reading it, so the first `ci` approval needs a grant to the user or a promote run as the SP | User + Claude | Decide on the grant (USE SCHEMA, EXECUTE, MANAGE on prompts) or an SP-run promote |
 | A5 | Real-model job run on dev: `databricks bundle run lighthouse_prompt_eval --params app_model=claims-medium,scorer_mode=llm-judges,judge_model=claims-judge` | Claude, when asked | Gives READY evidence based on real models, not the mock |
 | A6 | Verify SP `lighthouse-ci` can call the Unity Gateway model services (real-model CI runs) | Claude | Not verified; mock CI works |
@@ -59,7 +61,7 @@ gemma4-e4b-32k (judge).
 - Gateway endpoints `kong-claims-small` / `-medium` (track into exp 10), `kong-claims-judge`.
 - No `@champion` anywhere locally.
 
-**Databricks Free Edition** (host `dbc-79305b3a-397f`, CLI profile `lighthouse`):
+**Databricks Free Edition** (host `<workspace host>`, CLI profile `lighthouse`):
 - Vector Search endpoint `lighthouse-vs` (STANDARD, created 2026-11-27); no platform schemas yet
   (the notebook creates `dev_<user>_ai_*`).
 - dev target deployed from branch head `17206e1`; job run `299740435896324` SUCCESS (mock,
@@ -70,6 +72,31 @@ gemma4-e4b-32k (judge).
   `DATABRICKS_CLIENT_SECRET` (expires 2027-02-23).
 
 ## Progress log
+
+### 2026-11-27 (demo phase 7: rehearsal)
+- Dry run on Apps found hallucinations (handoff from memory; Genie follow-up invented case IDs;
+  boundary answer described another claim). Fixed: CaseFactVerifier (case IDs must come from this
+  turn's tool results; one corrective round, then withheld), follow-up rule, handoff fallback
+  returns real case facts, DecisionQuestionGuardrail (human-examiner sentence first).
+- `docs/demo-script.md` (10 steps, timings, fallbacks), `apps/lighthouse_demo/fallback/*.png`,
+  `demo_env.py up --deploy`; dev target pins genie_space_id, warehouse_id, session_store=lakebase.
+- Monday: `python scripts/demo_env.py up --deploy` 30 min before; `down` after. Everything DOWN now.
+
+### 2026-11-27 (demo phases 2-5: agent, API, UI, Apps, Lakebase; ADR-019)
+- Agent loop + guardrails + claims copilot (default model claims-alt-qwen-next; gpt-oss returned
+  empty replies on follow-ups -> one retry); FastAPI (SSE chat, playground, usage, evals, cache,
+  warm-up); React UI (copilot, playground, dashboard, evaluations).
+- Databricks App `lighthouse-demo-dev` (app service principal, grants applied), Lakebase project
+  `lighthouse-demo` (CU_1, pgvector 0.8.7, app schema lighthouse_app). Both DOWN after testing
+  (`scripts/demo_env.py down`; Lakebase endpoint disabled). `up` path not yet exercised end to end.
+- Local: docker compose demo-pg (5434). 322 tests offline.
+
+### 2026-11-27 (demo phase 1: claims data and MCP tools; ADR-018)
+- Revision 0005 applied to dev: `dev_<user>_ai_claims` (claim_case 40, claim_document 160,
+  `get_claim_case`). Genie space "Lighthouse claims (dev_<user>)" (ID in the local bundle overrides; a duplicate created by the first lookup was trashed).
+- `agents/` package: core tool contract, MCP client, Databricks MCP tools, claims copilot tool set.
+  Live via managed MCP: case lookup (and not found), guidance (off-topic refused), Genie (SQL +
+  answer). Tool calling 32/32 across 4 models. 297 tests offline.
 
 ### 2026-11-27 (traces in Unity Catalog, gated promote; ADR-017)
 - Traces stored in UC tables `workspace.dev_<user>_lighthouse.lh_<experiment>_*` via
@@ -125,7 +152,7 @@ gemma4-e4b-32k (judge).
   Applications (eval, try, agent) still do not tag calls: next platform phase.
 
 ### 2026-11-27 (later)
-- Notebook 02 run by the user on Databricks: `dev_asequitytrading_ai_*` created, 8 events.
+- Notebook 02 run by the user on Databricks: `dev_<user>_ai_*` created, 8 events.
 - Revision `0003_model_cost` (ADR-014): `model_price` rate card (`config/model_pricing.yaml`,
   illustrative rates), views `v_model_price`, `v_model_call_cost`, `v_model_cost_daily`.
   Applied to the dev prefix; live downgrade/upgrade round trip OK.

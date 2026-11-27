@@ -9,7 +9,7 @@ offline SQL rendering, in Python like the rest of the POC. Databricks specifics 
 - Restore points: before an upgrade or downgrade the runner records every platform table's
   current Delta version in `schema_migration_audit`; `restore_statements()` returns the
   `RESTORE TABLE ... TO VERSION AS OF` commands that undo a data migration.
-- Revisions use fully qualified names through placeholders ({catalog}, {mkt}, {obs}, {kn}) so one
+- Revisions use fully qualified names through placeholders ({catalog}, {mkt}, {obs}, {kn}, {clm}) so one
   revision serves every environment and personal dev prefix.
 - Concurrency: run migrations from one place at a time (the setup notebook or a job with
   max_concurrent_runs: 1); Delta has no advisory locks.
@@ -56,14 +56,15 @@ def column_exists(schema_key: str, table: str, column: str) -> bool:
     """Inside a revision: does the column exist? Offline (--sql) always False, so the DDL is shown.
 
     Delta DDL is not transactional; checking first keeps ADD COLUMNS re-runnable after a
-    partial failure. schema_key is one of "mkt", "obs", "kn".
+    partial failure. schema_key is one of "mkt", "obs", "kn", "clm".
     """
     from alembic import context, op
     from sqlalchemy import text
     if context.is_offline_mode():
         return False
     names: PlatformNames = context.config.attributes["platform_names"]
-    schema = {"mkt": names.marketplace, "obs": names.observability, "kn": names.knowledge}[schema_key]
+    schema = {"mkt": names.marketplace, "obs": names.observability, "kn": names.knowledge,
+              "clm": names.claims}[schema_key]
     row = op.get_bind().execute(text(
         f"SELECT count(*) FROM {names.catalog}.information_schema.columns "
         "WHERE table_schema = :schema AND table_name = :table AND column_name = :column"),

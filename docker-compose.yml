@@ -121,7 +121,25 @@ services:
     volumes:
       - ./kong:/kong:ro
 
+  # Demo app sessions + semantic cache (docs/demo-thin-ui.md, phase 5): Postgres with pgvector,
+  # the same SQL as Lakebase. Only for the demo app: docker compose up -d demo-pg
+  demo-pg:
+    image: pgvector/pgvector:0.8.0-pg16
+    environment:
+      POSTGRES_DB: lighthouse_demo
+      POSTGRES_USER: lighthouse
+      POSTGRES_PASSWORD: lighthouse-local-only
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - demo-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lighthouse -d lighthouse_demo"]
+      interval: 5s
+      retries: 10
+
 volumes:
+  demo-pg-data:
   mlflow-data:
   mlflow-artifacts:
   kong-db-data:

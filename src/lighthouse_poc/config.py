@@ -131,6 +131,7 @@ class PlatformConfig:
     embedding_model: str = "embed-default"
     use_case: str = "claim_settlement_assistant"   # request tag lh_use_case of application calls
     environment: str = "dev"                       # request tag lh_environment (dev | ci | prod)
+    genie_space_id: str | None = None              # claims copilot portfolio tool (Genie)
 
 
 @dataclass(frozen=True)
@@ -234,7 +235,8 @@ def _parse(name: str, data: Mapping, source: Path) -> Profile:
             vector_search_endpoint=str(platform.get("vector_search_endpoint") or "lighthouse-vs"),
             embedding_model=str(platform.get("embedding_model") or "embed-default"),
             use_case=str(platform.get("use_case") or "claim_settlement_assistant"),
-            environment=str(platform.get("environment") or "dev"))
+            environment=str(platform.get("environment") or "dev"),
+            genie_space_id=str(platform.get("genie_space_id") or "") or None)
     profile = Profile(
         name=name,
         environment=str(data.get("environment", name)),

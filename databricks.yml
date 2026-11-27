@@ -15,7 +15,11 @@ include:
 
 sync:
   # .gitignore is honoured (.env, .venv, MLflow state are never uploaded).
+  include:
+    - apps/lighthouse_demo/web/dist/**          # built UI (gitignored, served by the app)
   exclude:
+    - apps/lighthouse_demo/web/node_modules/**
+    - apps/lighthouse_demo/web/src/**
     - app/**
     - kong/**
     - docker-compose.yml
@@ -25,6 +29,18 @@ sync:
     - scripts/meeting_summariser_iterate.py      # local-only experiment (never on Databricks)
 
 variables:
+  genie_space_id:
+    description: Genie space of the claims copilot (lighthouse platform genie ensure prints it).
+    default: ""
+  warehouse_id:
+    description: SQL warehouse the demo app queries (usage, evals, Genie).
+    default: ""
+  session_store:
+    description: Demo app sessions + semantic cache. sqlite (testing; app disk is ephemeral) or lakebase (demo; start the instance first).
+    default: sqlite
+  lakebase_instance:
+    description: Lakebase database instance bound to the demo app (create with scripts/lakebase.py).
+    default: lighthouse-demo
   catalog:
     description: Unity Catalog catalog for the schema that holds prompts (Free Edition usually `workspace`).
     default: workspace
@@ -56,6 +72,11 @@ targets:
     default: true
     variables:
       platform_prefix: dev_${workspace.current_user.short_name}_
+      # demo app: genie_space_id and warehouse_id are workspace-specific and not committed; put them in
+      # .databricks/bundle/dev/variable-overrides.json (gitignored), e.g.
+      #   {"genie_space_id": "<lighthouse platform genie ensure>", "warehouse_id": "<SQL warehouse id>"}
+      # or pass --var / BUNDLE_VAR_genie_space_id, BUNDLE_VAR_warehouse_id.
+      session_store: lakebase
 
   # Deployment used by GitHub Actions. Files live in the deploying identity's home folder
   # (service principal lighthouse-ci), not /Workspace/Shared, which every user can write.

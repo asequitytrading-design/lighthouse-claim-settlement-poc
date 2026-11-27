@@ -592,6 +592,43 @@ def cmd_platform_usage(ctx: Context, args) -> int:
     return 0
 
 
+def cmd_platform_genie(ctx: Context, args) -> int:
+    from databricks.sdk import WorkspaceClient
+
+    from .platform.connection import resolve_warehouse
+    from .platform.genie import GenieSpaces
+    names = _platform(ctx, args)
+    client = WorkspaceClient()
+    configured = ctx.profile.platform.genie_space_id if ctx.profile.platform else None
+    warehouse = resolve_warehouse(client, args.warehouse or (ctx.profile.platform.warehouse_id
+                                                             if ctx.profile.platform else None))
+    space = GenieSpaces(client, ctx.logger).ensure(names, warehouse, configured)
+    print(f"Genie space {space.title}: {space.space_id} ({'created' if space.created else 'existing'})",
+          file=ctx.out)
+    print("The claims copilot finds it by title; set LIGHTHOUSE_GENIE_SPACE_ID to pin it.", file=ctx.out)
+    return 0
+
+
+def cmd_platform_app_grants(ctx: Context, args) -> int:
+    from sqlalchemy import text
+
+    from .platform.app_grants import grant_statements
+    names = _platform(ctx, args)
+    statements = grant_statements(names, args.principal, args.prompt_schema)
+    if args.dry_run:
+        print(";\n".join(statements) + ";", file=ctx.out)
+        return 0
+    engine = _engine(ctx, args, names)
+    try:
+        with engine.connect() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+    finally:
+        engine.dispose()
+    print(f"Granted {len(statements)} privileges sets to {args.principal}", file=ctx.out)
+    return 0
+
+
 def cmd_platform_verify(ctx: Context, args) -> int:
     from .platform.verification import SetupVerifier
     names = _platform(ctx, args)
@@ -745,7 +782,18 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Seconds to wait for the vector index (default 1800)")
     verify.add_argument("--environment", default="dev", help="Request tag lh_environment")
     verify.set_defaults(handler=cmd_platform_verify)
-    for sub in (*db_actions.values(), *model_actions, usage_sync, verify):
+    genie = platform_commands.add_parser("genie", help="Genie space over the synthetic claims tables")
+    genie_commands = genie.add_subparsers(dest="genie_command", required=True, metavar="action")
+    genie_ensure = genie_commands.add_parser("ensure", help="Find or create the claims Genie space")
+    genie_ensure.set_defaults(handler=cmd_platform_genie)
+    app_cmd = platform_commands.add_parser("app", help="Access for an application identity")
+    app_commands = app_cmd.add_subparsers(dest="app_command", required=True, metavar="action")
+    app_grants = app_commands.add_parser("grants", help="Grant Unity Catalog access to an app's service principal")
+    app_grants.add_argument("--principal", required=True, help="Service principal application ID")
+    app_grants.add_argument("--prompt-schema", help="Schema of the prompt registry (e.g. dev_<you>_lighthouse)")
+    app_grants.add_argument("--dry-run", action="store_true", help="Print the GRANT statements only")
+    app_grants.set_defaults(handler=cmd_platform_app_grants)
+    for sub in (*db_actions.values(), *model_actions, usage_sync, verify, genie_ensure, app_grants):
         _common(sub, suppress=True)
         sub.add_argument("--catalog", help="Override platform.catalog")
         sub.add_argument("--prefix", help="Override platform.schema_prefix (e.g. dev_<user>_)")
