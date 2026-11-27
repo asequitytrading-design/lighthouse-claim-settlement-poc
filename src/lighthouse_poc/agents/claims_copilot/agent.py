@@ -142,11 +142,14 @@ def price_function(profile: Profile) -> Callable[[str, int, int], float | None]:
 
 def build_copilot(profile: Profile, logger: logging.Logger, tools: dict[str, Tool] | None = None,
                   model_factory: Callable[[str], Any] | None = None,
-                  assistant_factory: Callable[[], Any] | None = None, cache: Any = None) -> Agent:
+                  assistant_factory: Callable[[], Any] | None = None, cache: Any = None,
+                  default_model: str | None = None, cache_threshold: float = 0.95,
+                  grounding: bool = True, portfolio: bool = True) -> Agent:
     from ...gateway import build_chat_model
     if tools is None:
         from .tools import build_tools
-        tools = build_tools(profile, logger, cache=cache)
+        tools = build_tools(profile, logger, cache=cache, cache_threshold=cache_threshold,
+                            grounding=grounding, portfolio=portfolio)
 
     @lru_cache(maxsize=8)
     def models(key: str):
@@ -165,7 +168,7 @@ def build_copilot(profile: Profile, logger: logging.Logger, tools: dict[str, Too
     tools = dict(tools)
     if "get_claim_case" in tools:
         tools["draft_handoff"] = HandoffTool(tools["get_claim_case"], assistant_factory)
-    return Agent(AgentConfig("claims_copilot", SYSTEM_PROMPT, default_model=DEFAULT_MODEL), tools,
+    return Agent(AgentConfig("claims_copilot", SYSTEM_PROMPT, default_model=default_model or DEFAULT_MODEL), tools,
                  model_factory or models, logger,
                  guardrails=[NonDecisionGuardrail(), DecisionQuestionGuardrail(), QuoteGuardrail()],
                  price_of=price_function(profile),

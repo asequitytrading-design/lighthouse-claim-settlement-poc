@@ -97,6 +97,7 @@ TABLE_SCHEMAS = {
     "gateway_usage": lambda n: n.observability,
     "source_document": lambda n: n.knowledge,
     "document_chunk": lambda n: n.knowledge,
+    "app_config": lambda n: n.marketplace,
     "claim_case": lambda n: n.claims,
     "claim_document": lambda n: n.claims,
 }

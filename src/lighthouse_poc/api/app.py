@@ -53,27 +53,14 @@ def default_services(settings: AppSettings) -> AppServices:
     from ..config import load_profile
     from ..logging_config import configure_logging
     from ..notebook_support import model_service_env
-    from ..sessions.store import SqliteSessionStore
     logger = configure_logging()
     for key, value in model_service_env().items():      # UNITY_GATEWAY_*_MODEL from the catalog
         os.environ.setdefault(key, value)
+    from ..sessions.factory import make_store
     profile = load_profile(settings.profile)
-    from ..sessions.cache import MemorySemanticCache
-    store = cache = None
-    if settings.session_store in ("postgres", "lakebase"):
-        from ..sessions.postgres import Connector, PgSemanticCache, PostgresSessionStore
-        try:
-            connector = Connector.from_env(settings.session_store)
-            store, cache = PostgresSessionStore(connector), PgSemanticCache(connector)
-        except Exception as exc:          # e.g. Lakebase stopped: keep the demo up on SQLite
-            logger.error("session_store_fallback", exc_info=True, extra={
-                "store": settings.session_store, "error_type": type(exc).__name__,
-                "error_category": "session_store"})
-            settings = replace(settings, session_store=f"sqlite (fallback: {settings.session_store} "
-                                                       f"unavailable, {type(exc).__name__})")
-    if store is None:
-        store, cache = SqliteSessionStore(settings.sqlite_path), MemorySemanticCache()
-    return AppServices(profile, settings, store, logger, cache=cache)
+    store, cache, effective = make_store(settings.session_store, settings.sqlite_path, logger)
+    return AppServices(profile, replace(settings, session_store=effective), store, logger, cache=cache,
+                       store_factory=lambda mode: make_store(mode, settings.sqlite_path, logger))
 
 
 def create_app(services: AppServices | None = None, settings: AppSettings | None = None) -> FastAPI:
@@ -84,6 +71,7 @@ def create_app(services: AppServices | None = None, settings: AppSettings | None
 
     @app.get("/api/health")
     def health():
+        services.refresh_config()
         return services.health()
 
     @app.post("/api/warmup")
@@ -92,10 +80,12 @@ def create_app(services: AppServices | None = None, settings: AppSettings | None
 
     @app.get("/api/models")
     def models():
+        services.refresh_config(background=True)
         return {"models": services.models()}
 
     @app.post("/api/chat")
     def chat(request: ChatRequest):
+        services.refresh_config(background=True)
         return StreamingResponse(_sse(services.chat(request.message, request.model, request.session_id)),
                                  media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

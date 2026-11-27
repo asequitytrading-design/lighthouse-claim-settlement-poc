@@ -46,9 +46,17 @@ class AppServices:
                  logger: logging.Logger, copilot_factory: Callable[[], Any] | None = None,
                  model_factory: Callable[[str], Any] | None = None,
                  query: Callable[[str], list[dict]] | None = None, host: str | None = None,
-                 cache: Any = None):
+                 cache: Any = None, store_factory: Callable[[str], tuple] | None = None,
+                 config_ttl: float = 60.0):
         self.profile, self.settings, self.store, self.logger = profile, settings, store, logger
         self.cache = cache
+        self._store_factory = store_factory
+        from ..agents.claims_copilot.agent import DEFAULT_MODEL
+        from ..platform.app_config import AppConfig
+        base_store = settings.session_store if settings.session_store in ("sqlite", "lakebase") else "sqlite"
+        self.config = AppConfig(session_store=base_store, default_model=DEFAULT_MODEL)
+        self._config_ttl, self._config_read_at = config_ttl, 0.0
+        self.config_status = "defaults (no stored settings read yet)"
         self._copilot_factory = copilot_factory
         self._copilot = None
         self._model_factory = model_factory
@@ -63,7 +71,11 @@ class AppServices:
         if self._copilot is None:
             if self._copilot_factory is None:
                 from ..agents.claims_copilot.agent import build_copilot
-                self._copilot = build_copilot(self.profile, self.logger, cache=self.cache)
+                c = self.config
+                self._copilot = build_copilot(
+                    self.profile, self.logger, cache=self.cache if c.semantic_cache == "on" else None,
+                    default_model=c.default_model, cache_threshold=float(c.cache_threshold),
+                    grounding=c.grounding_check == "on", portfolio=c.genie == "on")
             else:
                 self._copilot = self._copilot_factory()
         return self._copilot
@@ -134,7 +146,7 @@ class AppServices:
         return build_chat_model(self.profile, key, self.logger)
 
     # ------------------------------------------------------------ models
-    def models(self) -> list[dict]:
+    def models(self, apply: bool = True) -> list[dict]:
         from ..agents.claims_copilot.agent import DEFAULT_MODEL, price_function
         from ..platform.model_catalog import load_model_catalog
         price = price_function(self.profile)
@@ -148,7 +160,7 @@ class AppServices:
                            "family": entry.family, "status": entry.status,
                            "input_usd_per_1m": price(entry.key, 1_000_000, 0),
                            "output_usd_per_1m": price(entry.key, 0, 1_000_000),
-                           "default": entry.key == DEFAULT_MODEL})
+                           "default": entry.key == (self.config.default_model if apply else DEFAULT_MODEL)})
         return listed
 
     # ------------------------------------------------------------ usage and evals (Unity Catalog)
@@ -228,6 +240,45 @@ class AppServices:
             return None
         return f"{self.host}/ml/experiments/{row['experiment_id']}/runs/{row['run_id']}"
 
+    # ------------------------------------------------------------ live settings (notebook 06)
+    def refresh_config(self, force: bool = False, background: bool = False) -> None:
+        """Re-read <mkt>.app_config (at most once per TTL, only when requests arrive) and apply
+        changes: a new store/cache, or a rebuilt copilot. Never fails a request. background=True
+        (chat, models) does not make the request wait for the warehouse query."""
+        if not force and time.monotonic() - self._config_read_at < self._config_ttl:
+            return
+        self._config_read_at = time.monotonic()
+        if background:
+            threading.Thread(target=self._read_config, name="app-config", daemon=True).start()
+            return
+        self._read_config()
+
+    def _read_config(self) -> None:
+        try:
+            from ..platform.app_config import merge_rows, read_sql
+            from ..platform.runtime import platform_names
+            rows = (self._query_fn or self._warehouse)(read_sql(platform_names(self.profile), self.settings.app_name))
+            models = {m["key"] for m in self.models(apply=False)}
+            wanted = merge_rows(self.config, rows, models)
+        except Exception as exc:                 # table missing, warehouse asleep...: keep current
+            self.config_status = f"kept current settings ({type(exc).__name__})"
+            return
+        self.config_status = f"read {len(rows)} stored settings"
+        if wanted != self.config:
+            self.apply_config(wanted)
+
+    def apply_config(self, wanted) -> None:
+        with self._lock:                         # never switch in the middle of a turn
+            old, self.config = self.config, wanted
+            if wanted.session_store != old.session_store and self._store_factory:
+                store, cache, effective = self._store_factory(wanted.session_store)
+                self.store, self.cache = store, cache
+                from dataclasses import replace
+                self.settings = replace(self.settings, session_store=effective)
+            self._copilot = None                 # rebuilt on next use with the new options
+        self.logger.info("app_config_applied", extra={"config": wanted.as_dict(),
+                                                      "previous": old.as_dict()})
+
     # ------------------------------------------------------------ warm-up (before a demo)
     def warmup(self) -> dict:
         """Load the copilot and touch every backend once (cold calls take up to ~8 s; Genie and
@@ -274,7 +325,10 @@ class AppServices:
         except Exception as exc:
             checks["workspace_auth"] = f"error: {type(exc).__name__}"
         checks["copilot"] = "ready" if self._copilot is not None else "not loaded (loads on first chat)"
-        checks["semantic_cache"] = self.cache.describe() if self.cache is not None else "off"
+        checks["semantic_cache"] = (self.cache.describe() if self.cache is not None and
+                                    self.config.semantic_cache == "on" else "off")
+        checks["live_settings"] = {**self.config.as_dict(), "app_name": self.settings.app_name,
+                                   "status": self.config_status}
         return checks
 
 

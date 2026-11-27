@@ -32,6 +32,7 @@ resources:
           - {name: LIGHTHOUSE_PLATFORM_PREFIX, value: "${var.platform_prefix}"}
           - {name: LIGHTHOUSE_ENVIRONMENT, value: "${bundle.target}"}
           - {name: LIGHTHOUSE_APP_USE_CASE, value: claims_copilot}
+          - {name: LIGHTHOUSE_APP_NAME, value: "lighthouse-demo-${bundle.target}"}
           - {name: LIGHTHOUSE_SESSION_STORE, value: "${var.session_store}"}
           - {name: LIGHTHOUSE_LAKEBASE_INSTANCE, value: "${var.lakebase_instance}"}
           - {name: LIGHTHOUSE_SQLITE_PATH, value: /tmp/lighthouse/sessions.db}

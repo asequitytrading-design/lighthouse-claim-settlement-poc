@@ -450,3 +450,10 @@ branch endpoint (compute idle). The app identity cannot create in `public`.
 
 **Consequences.** Turns are serialised (one process-wide usage tracker): fine for one presenter;
 multi-user hosting needs per-request trackers. Chat history in SQLite mode is lost on restart.
+
+**Addendum (2026-11-27): live settings.** Revision 0006 adds `<mkt>.app_config`; notebook 06 writes
+validated settings (session store, default model, semantic cache and threshold, grounding check,
+Genie) and the running app re-reads them at most once a minute when requests arrive (background
+thread for chat; no polling while idle), rebuilding only the store/cache or the copilot. A notebook
+cannot call the app API (Apps accept OAuth user tokens), hence the table as the control channel.
+Verified live: model switch and cache off/on applied without restart.

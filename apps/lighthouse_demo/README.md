@@ -42,6 +42,10 @@ python scripts/demo_env.py down     # stop the app and disable the Lakebase comp
 python scripts/demo_env.py status
 ```
 
+## Live settings (no restart)
+
+Notebook `notebooks/06_demo_app_controls.py`: status, start, **apply settings** (session store, default model, semantic cache + threshold, grounding check, Genie) into `<prefix>ai_marketplace.app_config` (revision 0006), stop. The running app re-reads them at most once a minute when requests arrive; see `/api/health` -> `live_settings`.
+
 ## Before the demo
 
 Full script with timings and fallbacks: [`docs/demo-script.md`](../../docs/demo-script.md); screenshots of every step in `fallback/`.

@@ -141,3 +141,45 @@ def test_unreachable_postgres_store_falls_back_to_sqlite(monkeypatch):
     services = default_services(AppSettings(session_store="postgres", sqlite_path=":memory:"))
     assert services.store.describe() == "sqlite::memory:"
     assert services.settings.session_store.startswith("sqlite (fallback: postgres unavailable")
+
+
+def test_live_settings_are_read_validated_and_applied():
+    from lighthouse_poc.platform.app_config import AppConfig, upsert_sql, validate
+    from lighthouse_poc.platform.naming import PlatformNames
+    from lighthouse_poc.exceptions import ConfigurationError
+    rows = [{"config_key": "default_model", "config_value": "claims-alt-llama"},
+            {"config_key": "semantic_cache", "config_value": "off"},
+            {"config_key": "session_store", "config_value": "lakebase"},
+            {"config_key": "genie", "config_value": "maybe"}]                 # invalid: ignored
+    client, copilot, seen = _client({"app_config": rows})
+    health = client.get("/api/health").json()
+    assert health["live_settings"]["default_model"] == "claims-alt-llama"
+    assert health["live_settings"]["semantic_cache"] == "off" and health["semantic_cache"] == "off"
+    assert health["live_settings"]["genie"] == "on"                             # invalid row ignored
+    assert any("app_config" in sql and "lighthouse-demo-local" in sql for sql in seen)
+    models = {m["key"]: m for m in client.get("/api/models").json()["models"]}
+    assert models["claims-alt-llama"]["default"] and not models["claims-alt-qwen-next"]["default"]
+    sql = upsert_sql(PlatformNames("workspace", "dev_alex_"), "lighthouse-demo-dev",
+                     {"session_store": "lakebase", "cache_threshold": "0.9"}, "me@x.com")
+    assert "workspace.dev_alex_ai_marketplace.app_config" in sql and "'0.90'" in sql
+    with pytest.raises(ConfigurationError):
+        validate("session_store", "mysql")
+    with pytest.raises(ConfigurationError):
+        validate("default_model", "gpt-9", {"claims-small"})
+    assert AppConfig().semantic_cache == "on"
+
+
+def test_switching_the_session_store_uses_the_factory_without_restart():
+    from lighthouse_poc.platform.app_config import AppConfig
+    profile = load_profile("databricks", env={"DATABRICKS_HOST": "https://h", "LIGHTHOUSE_PLATFORM_PREFIX": "dev_alex_"})
+    calls = []
+
+    def factory(mode):
+        calls.append(mode)
+        return SqliteSessionStore(":memory:"), None, f"{mode}-test"
+    services = AppServices(profile, AppSettings(session_store="sqlite", sqlite_path=":memory:"),
+                           SqliteSessionStore(":memory:"), LOG, store_factory=factory, query=lambda sql: [])
+    services.apply_config(AppConfig(session_store="lakebase"))
+    assert calls == ["lakebase"] and services.settings.session_store == "lakebase-test"
+    services.apply_config(AppConfig(session_store="lakebase", genie="off"))
+    assert calls == ["lakebase"]                                                 # store unchanged

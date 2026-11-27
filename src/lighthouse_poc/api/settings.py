@@ -8,6 +8,7 @@
   LIGHTHOUSE_PG_DSN         postgres DSN for local Postgres or Lakebase (phase 5)
   LIGHTHOUSE_WEB_DIST       built UI to serve at / (default apps/lighthouse_demo/web/dist)
   LIGHTHOUSE_DASHBOARD_URL  optional link to the Lakeview observability dashboard
+  LIGHTHOUSE_APP_NAME       row key in <mkt>.app_config for live settings (notebook 06)
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ class AppSettings:
     pg_dsn: str | None = None
     web_dist: Path = PROJECT_ROOT / "apps" / "lighthouse_demo" / "web" / "dist"
     dashboard_url: str | None = None
+    app_name: str = "lighthouse-demo-local"
 
     @classmethod
     def from_env(cls, env: dict | None = None) -> "AppSettings":
@@ -38,4 +40,5 @@ class AppSettings:
             sqlite_path=env.get("LIGHTHOUSE_SQLITE_PATH", ".lighthouse/sessions.db"),
             pg_dsn=env.get("LIGHTHOUSE_PG_DSN") or None,
             web_dist=Path(env.get("LIGHTHOUSE_WEB_DIST") or cls.web_dist),
-            dashboard_url=env.get("LIGHTHOUSE_DASHBOARD_URL") or None)
+            dashboard_url=env.get("LIGHTHOUSE_DASHBOARD_URL") or None,
+            app_name=env.get("LIGHTHOUSE_APP_NAME") or "lighthouse-demo-local")

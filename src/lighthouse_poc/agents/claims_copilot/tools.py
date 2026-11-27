@@ -28,7 +28,8 @@ def _answerer(profile: Profile, logger: logging.Logger):
 
 def build_tools(profile: Profile, logger: logging.Logger, auth: Any = None, embedder: Any = None,
                 workspace: Any = None, http: Any = None, answerer: Any = None,
-                cache: Any = None) -> dict[str, Tool]:
+                cache: Any = None, cache_threshold: float = 0.95, grounding: bool = True,
+                portfolio: bool = True) -> dict[str, Tool]:
     from ...gateway import build_auth
     from ...platform.genie import GenieSpaces, space_title
     from ...platform.runtime import platform_names
@@ -42,7 +43,9 @@ def build_tools(profile: Profile, logger: logging.Logger, auth: Any = None, embe
         from ...gateway import build_embedding_model
         embedder = build_embedding_model(profile, platform.embedding_model, logger)
     space_id = platform.genie_space_id
-    if not space_id:
+    if not portfolio:
+        space_id = None
+    elif not space_id:
         if workspace is None:
             from databricks.sdk import WorkspaceClient
             workspace = WorkspaceClient()
@@ -52,13 +55,16 @@ def build_tools(profile: Profile, logger: logging.Logger, auth: Any = None, embe
             host, uc_functions_path(names.catalog, names.claims), auth, logger, http=http)),
         "search_guidance": GuidanceSearchTool(McpHttpClient(
             host, vector_search_path(names.catalog, names.knowledge), auth, logger, http=http), embedder,
-            answerer=answerer if answerer is not None else _answerer(profile, logger),
-            cache=cache, cache_namespace=f"guidance:{names.vector_index}:{platform.embedding_model}"),
+            answerer=(answerer if answerer is not None else _answerer(profile, logger)) if grounding else None,
+            cache=cache, cache_threshold=cache_threshold,
+            # grounded and ungrounded results differ: separate cache namespaces
+            cache_namespace=f"guidance:{names.vector_index}:{platform.embedding_model}:"
+                            f"{'grounded' if grounding else 'raw'}"),
     }
     if space_id:
         tools["ask_portfolio"] = PortfolioTool(McpHttpClient(
             host, genie_path(space_id), auth, logger, timeout_seconds=90, http=http))
-    else:
+    elif portfolio:
         logger.warning("portfolio_tool_unavailable", extra={
             "reason": f"no Genie space '{space_title(names)}': run lighthouse platform genie ensure"})
     return tools

@@ -13,6 +13,7 @@ python scripts/demo_env.py up        # Lakebase on, app on, warm-up (~5 min); pr
 - Open the URL in a browser logged in to the workspace; check the sidebar dot says **Databricks connected**.
 - Optional: approve a prompt version (notebook 05 step 9) so the handoff uses the governed `@champion` template.
 - Keep `apps/lighthouse_demo/fallback/*.png` open in another window (screenshots of every step).
+- Live switches without restart (model, cache, grounding, Genie, Lakebase/SQLite): notebook `06_demo_app_controls`, step 3; applied within ~60 s.
 - Default model `claims-alt-qwen-next` (composer). Avoid `claims-medium` live (reasoning model, p95 > 2 min).
 
 ## Flow
