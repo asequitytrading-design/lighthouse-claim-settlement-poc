@@ -592,6 +592,23 @@ def cmd_platform_usage(ctx: Context, args) -> int:
     return 0
 
 
+def cmd_platform_genie(ctx: Context, args) -> int:
+    from databricks.sdk import WorkspaceClient
+
+    from .platform.connection import resolve_warehouse
+    from .platform.genie import GenieSpaces
+    names = _platform(ctx, args)
+    client = WorkspaceClient()
+    configured = ctx.profile.platform.genie_space_id if ctx.profile.platform else None
+    warehouse = resolve_warehouse(client, args.warehouse or (ctx.profile.platform.warehouse_id
+                                                             if ctx.profile.platform else None))
+    space = GenieSpaces(client, ctx.logger).ensure(names, warehouse, configured)
+    print(f"Genie space {space.title}: {space.space_id} ({'created' if space.created else 'existing'})",
+          file=ctx.out)
+    print("The claims copilot finds it by title; set LIGHTHOUSE_GENIE_SPACE_ID to pin it.", file=ctx.out)
+    return 0
+
+
 def cmd_platform_verify(ctx: Context, args) -> int:
     from .platform.verification import SetupVerifier
     names = _platform(ctx, args)
@@ -745,7 +762,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Seconds to wait for the vector index (default 1800)")
     verify.add_argument("--environment", default="dev", help="Request tag lh_environment")
     verify.set_defaults(handler=cmd_platform_verify)
-    for sub in (*db_actions.values(), *model_actions, usage_sync, verify):
+    genie = platform_commands.add_parser("genie", help="Genie space over the synthetic claims tables")
+    genie_commands = genie.add_subparsers(dest="genie_command", required=True, metavar="action")
+    genie_ensure = genie_commands.add_parser("ensure", help="Find or create the claims Genie space")
+    genie_ensure.set_defaults(handler=cmd_platform_genie)
+    for sub in (*db_actions.values(), *model_actions, usage_sync, verify, genie_ensure):
         _common(sub, suppress=True)
         sub.add_argument("--catalog", help="Override platform.catalog")
         sub.add_argument("--prefix", help="Override platform.schema_prefix (e.g. dev_<user>_)")

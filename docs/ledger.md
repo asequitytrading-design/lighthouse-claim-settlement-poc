@@ -73,6 +73,14 @@ gemma4-e4b-32k (judge).
 
 ## Progress log
 
+### 2026-11-27 (demo phase 1: claims data and MCP tools; ADR-018)
+- Revision 0005 applied to dev: `dev_asequitytrading_ai_claims` (claim_case 40, claim_document 160,
+  `get_claim_case`). Genie space "Lighthouse claims (dev_asequitytrading)"
+  `01f1ea5c41ad185297cb5103da28d66a` (a duplicate created by the first lookup was trashed).
+- `agents/` package: core tool contract, MCP client, Databricks MCP tools, claims copilot tool set.
+  Live via managed MCP: case lookup (and not found), guidance (off-topic refused), Genie (SQL +
+  answer). Tool calling 32/32 across 4 models. 297 tests offline.
+
 ### 2026-11-27 (traces in Unity Catalog, gated promote; ADR-017)
 - Traces stored in UC tables `workspace.dev_<user>_lighthouse.lh_<experiment>_*` via
   `tracking.activate_experiment` (table-prefix form; schema form disabled on Free Edition).

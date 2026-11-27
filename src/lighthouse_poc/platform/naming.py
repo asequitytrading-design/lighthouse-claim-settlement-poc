@@ -1,11 +1,13 @@
 """Unity Catalog names of the AI Marketplace data platform.
 
-Three schemas per environment, all in one catalog:
+Four schemas per environment, all in one catalog:
   <prefix>ai_marketplace    governed reference data: model catalog, use cases, release decisions,
                             migration history and restore points
   <prefix>ai_observability  usage and quality events: model invocations, evaluations, vector
                             queries, and views joined with system.ai_gateway.usage
   <prefix>ai_knowledge      knowledge base: documents, embedded chunks, vector index
+  <prefix>ai_claims         synthetic claims data the agents read (stand-in for the client's
+                            claims lakehouse) and the agent tool functions (managed MCP)
 """
 from __future__ import annotations
 
@@ -51,8 +53,12 @@ class PlatformNames:
         return f"{self.prefix}ai_knowledge"
 
     @property
-    def schemas(self) -> tuple[str, str, str]:
-        return (self.marketplace, self.observability, self.knowledge)
+    def claims(self) -> str:
+        return f"{self.prefix}ai_claims"
+
+    @property
+    def schemas(self) -> tuple[str, ...]:
+        return (self.marketplace, self.observability, self.knowledge, self.claims)
 
     def fq(self, schema: str, table: str) -> str:
         """Fully qualified name: catalog.schema.table."""
@@ -66,11 +72,12 @@ class PlatformNames:
             raise ConfigurationError(f"Unknown platform table {name!r}") from None
 
     def sql_names(self) -> dict[str, str]:
-        """Placeholders for migration SQL: {catalog}, {mkt}, {obs}, {kn} (qualified schemas)."""
+        """Placeholders for migration SQL: {catalog}, {mkt}, {obs}, {kn}, {clm} (qualified schemas)."""
         return {"catalog": self.catalog,
                 "mkt": f"{self.catalog}.{self.marketplace}",
                 "obs": f"{self.catalog}.{self.observability}",
-                "kn": f"{self.catalog}.{self.knowledge}"}
+                "kn": f"{self.catalog}.{self.knowledge}",
+                "clm": f"{self.catalog}.{self.claims}"}
 
     @property
     def vector_index(self) -> str:
@@ -90,4 +97,6 @@ TABLE_SCHEMAS = {
     "gateway_usage": lambda n: n.observability,
     "source_document": lambda n: n.knowledge,
     "document_chunk": lambda n: n.knowledge,
+    "claim_case": lambda n: n.claims,
+    "claim_document": lambda n: n.claims,
 }

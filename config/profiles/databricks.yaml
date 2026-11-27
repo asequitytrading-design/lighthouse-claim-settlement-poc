@@ -66,6 +66,7 @@ platform:
   schema_prefix: ${LIGHTHOUSE_PLATFORM_PREFIX:-}
   warehouse_id: ${DATABRICKS_WAREHOUSE_ID:-}        # empty: the first available SQL warehouse
   vector_search_endpoint: ${LIGHTHOUSE_VS_ENDPOINT:-lighthouse-vs}   # Free Edition: one endpoint
+  genie_space_id: ${LIGHTHOUSE_GENIE_SPACE_ID:-}    # empty: found by title ("Lighthouse claims (<prefix>)")
   embedding_model: embed-default
   # Attribution (ADR-013): every model call is tagged with these unless a run overrides them.
   use_case: ${LIGHTHOUSE_USE_CASE:-claim_settlement_assistant}

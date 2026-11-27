@@ -404,3 +404,26 @@ MLflow-managed storage and the reason is logged and printed (ADR-016 capability 
 **Consequences.** Verified live: eval with judges, gate/rubric assessments, prompt links, Review App
 sessions, HUMAN assessments, `search_traces` by run, and the UC result rows all work with UC-stored
 traces. Old traces stay in the archive experiment (Databricks' migration tool can move them).
+
+## ADR-018: Agents package, Databricks managed MCP tools, synthetic claims schema (2026-11-27)
+
+**Decision.** Agents live in `src/lighthouse_poc/agents/`: `core/` (tool contract, later the loop and
+guardrails), `tools/` (a minimal MCP client and tools backed by Databricks managed MCP servers) and
+one folder per agent (`claims_copilot/`). The copilot's tools are Databricks-managed MCP servers, so
+nothing is hosted by us: `get_claim_case` (UC function, UC-functions server), `search_guidance`
+(knowledge index, Vector Search server; query embedded through Unity Gateway because the index uses
+self-managed embeddings; passages below similarity 0.52 are not returned) and `ask_portfolio`
+(Genie space, Genie server). Revision 0005 adds schema `<prefix>ai_claims` (stand-in for the client's
+claims lakehouse, synthetic only): `claim_case` (40), `claim_document` (160) and the
+`get_claim_case` function. The schema holds tool functions only, because the UC-functions MCP
+server exposes every function in it. The Genie space is created idempotently
+(`lighthouse platform genie ensure`) and found by title, or pinned with `LIGHTHOUSE_GENIE_SPACE_ID`.
+
+**Alternatives.** Our own MCP server (more control, but hosting and auth to run); the `mcp` SDK
+(SSE sessions are not needed for tools/list and tools/call on managed servers); direct SDK calls
+without MCP (the meeting asked for MCP, and MCP keeps tools portable to Agent Bricks and other
+clients).
+
+**Consequences.** Genie answers take 10-20 s and cold calls up to 8 s: the demo needs a warm-up.
+The Vector Search MCP server accepts a vector or text, not both (no hybrid through MCP). Genie lists
+spaces with a delay and renames duplicate titles, hence lookup by title prefix, oldest first.

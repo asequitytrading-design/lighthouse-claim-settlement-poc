@@ -124,7 +124,7 @@ Modern conversational layout (in the style of current chat products):
 | Phase | Work | Exit check |
 |---|---|---|
 | 0 | Branch, design doc, tool-calling check | done (32/32) |
-| 1 | Synthetic claim data + UC function + Genie space; MCP client + `ToolProvider`; tool round trip from Python | each tool returns synthetic data through MCP |
+| 1 | Synthetic claim data + UC function + Genie space; MCP client + `ToolProvider`; tool round trip from Python | **done 2026-11-27**: all three tools live via managed MCP |
 | 2 | `AgentService` (loop, streaming events, guardrails, usage tags) + tests with fake tools | agent answers the 3 demo questions in a script |
 | 3 | FastAPI app: chat SSE, models, playground, usage, evals, health; tests with fakes | `pytest`; curl the endpoints |
 | 4 | React UI: chat (streaming, tool cards, citations), playground, dashboard, evals | demo script runs end to end locally |
