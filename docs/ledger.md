@@ -5,25 +5,27 @@ session; newest entries first. Synthetic data only.
 
 ## Resume here (last updated 2026-11-27)
 
-**Branch:** `feat/lighthouse-cli`, pushed, **no PR yet**. The user tests the UI demo flow and a
-dev deployment manually, then asks for the PR.
+**Branch:** `feat/demo-thin-ui` (from `main` at `8305b85`). PR #3 (`feat/lighthouse-cli`) merged;
+all merged branches deleted locally and on GitHub. CI: tests on every push/PR; Databricks deploy
+is manual only (`DEPLOY_ON_MAIN` / `RUN_JOB_ON_MAIN` repo variables to re-enable) to save Free
+Edition capacity.
 
-**Next session, start with:**
-1. User explores with `notebooks/03_explore_platform_data.py` and runs
-   `notebooks/04_observability_dashboard.py` (dashboard already deployed to
-   `/Workspace/Users/<user>/lighthouse/AI Marketplace observability (dev_asequitytrading_)`).
-   Widget rendering was not checked visually by Claude (no browser): fix any widget the user
-   reports in `platform/dashboard.py`. Replace illustrative rates when contract rates exist.
-2. Next platform phase on request: applications write `model_invocation` with request tags
-   (agent, `lighthouse try/eval`), `eval_run` from `lighthouse eval`, `release_decision` from
-   `lighthouse promote`; bundle task `platform_migrate`.
-3. Commit and push the platform work and the local-test wrap-up when asked; PR for
-   `feat/lighthouse-cli` when asked (A2).
+**Current focus: demo for Arjun (Monday, see the planning meeting
+of 2026-11-27).** Thin local UI (Playground, Dashboard, chat agent)
+over an API layer on what exists; agent enriched with Unity Catalog data through MCP; semantic
+cache candidate (Lakebase); prompt registry and eval added to the same UI later. Brainstorm,
+feasibility, then design and implementation plan in `docs/demo-thin-ui.md` before code.
+
+**Open user actions:**
+1. Real `promote` through notebook 05 step 9 when a registered version is green (Claude does
+   not record approvals).
+2. Replace illustrative rates in `config/model_pricing.yaml` when contract rates exist.
+3. Optional: unpause the hourly usage sync job; migrate archive-experiment traces to UC.
 
 Quick re-entry commands:
 ```bash
 docker compose up -d && python scripts/seed_ui_demo.py        # local stack + UI demo state
-python -m pytest -q                                            # 166 tests, offline
+python -m pytest -q                                            # 287 tests, offline
 lighthouse prompt list --prompt-name claim_intake_triage
 export DATABRICKS_CONFIG_PROFILE=lighthouse                    # Databricks CLI profile
 ```
